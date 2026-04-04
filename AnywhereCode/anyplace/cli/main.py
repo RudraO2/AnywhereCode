@@ -20,6 +20,9 @@ from anyplace.core.llm_provider import LLMProvider
 from anyplace.core.build_orchestrator import BuildOrchestrator
 from anyplace.cli.plan_preview import show_plan_approval_screen, display_plan_error
 from anyplace.cli.progress import GenerationProgress
+from anyplace.core.commit_generator import CommitGenerator
+from anyplace.core.build_runner import BuildRunner
+from anyplace.core.deploy_generator import DeployGenerator
 
 console = Console()
 
@@ -334,6 +337,166 @@ def test_providers():
 
     except Exception as e:
         exit_with_error(e, "Testing providers")
+
+
+@cli.command()
+@click.option("--all", "-a", "stage_all", is_flag=True, default=False,
+              help="Stage all changes before committing")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show generated message without committing")
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+def commit(stage_all, dry_run, project_dir):
+    """Generate a smart AI commit message and commit staged changes."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+
+    if not (path / ".git").exists():
+        console.print(f"[bold red]Not a git repository:[/bold red] {path}")
+        console.print("Run [bold]git init[/bold] first.")
+        return
+
+    try:
+        api_mgr = APIManager()
+        llm = LLMProvider(api_mgr)
+        commit_gen = CommitGenerator(llm)
+
+        if stage_all:
+            console.print("[dim]Staging all changes...[/dim]")
+
+        diff = commit_gen.get_staged_diff(path) if not stage_all else commit_gen.get_unstaged_diff(path)
+
+        if not diff.strip() and not stage_all:
+            console.print("[yellow]No staged changes. Use [bold]-a[/bold] to stage everything.[/yellow]")
+            return
+
+        console.print("\n[bold cyan]🤖 Generating commit message...[/bold cyan]")
+        message = commit_gen.generate_message(diff) if not stage_all else None
+
+        if stage_all:
+            import subprocess
+            subprocess.run(["git", "add", "-A"], cwd=path, check=True)
+            diff = commit_gen.get_staged_diff(path)
+            message = commit_gen.generate_message(diff)
+
+        from rich.panel import Panel
+        console.print(Panel(message, title="📝 Proposed Commit Message", border_style="green"))
+
+        if dry_run:
+            console.print("[dim]Dry run - no commit made[/dim]")
+            return
+
+        if click.confirm("Commit with this message?"):
+            import subprocess
+            result = subprocess.run(
+                ["git", "commit", "-m", message],
+                cwd=path,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                console.print("[bold green]✅ Committed![/bold green]")
+            else:
+                console.print(f"[bold red]Commit failed:[/bold red] {result.stderr.strip()}")
+
+    except (GenerationError, APIError) as e:
+        exit_with_error(e, "Generating commit message")
+    except ConfigError as e:
+        exit_with_error(e, "Checking configuration")
+
+
+@cli.command()
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+@click.option("--install", is_flag=True, default=False,
+              help="Run npm install before building")
+def build(project_dir, install):
+    """Detect project type and run the appropriate build command."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+    runner = BuildRunner(path)
+    project_type = runner._detect_project_type()
+
+    console.print(f"[bold cyan]🔍 Detected project type:[/bold cyan] [bold]{project_type}[/bold]")
+
+    try:
+        if install:
+            console.print("[bold cyan]📦 Installing dependencies...[/bold cyan]")
+            import subprocess
+            result = subprocess.run(
+                runner.get_install_command(),
+                cwd=path,
+                capture_output=False,
+            )
+            if result.returncode != 0:
+                console.print("[bold red]Install failed[/bold red]")
+                return
+
+        console.print(f"[bold cyan]🔨 Running build...[/bold cyan]")
+        success = runner.run_build(progress_callback=lambda line: console.print(f"  [dim]{line}[/dim]"))
+
+        if success:
+            console.print("[bold green]✅ Build complete![/bold green]")
+
+    except GenerationError as e:
+        exit_with_error(e, "Building project")
+
+
+@cli.command()
+@click.option("--target", type=click.Choice(["eas", "github", "auto"]),
+              default="auto", show_default=True, help="Deploy target")
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+def deploy(target, project_dir):
+    """Generate deployment configuration (EAS, GitHub Actions, etc.)."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+    runner = BuildRunner(path)
+    project_type = runner._detect_project_type()
+
+    # Auto-select target based on project type
+    if target == "auto":
+        target = "eas" if project_type == "expo-rn" else "github"
+
+    console.print(f"[bold cyan]🚀 Generating deploy config[/bold cyan] → [bold]{target}[/bold]")
+
+    try:
+        api_mgr = APIManager()
+        llm = LLMProvider(api_mgr)
+        deploy_gen = DeployGenerator(path, llm)
+
+        result = deploy_gen.deploy(target)
+
+        console.print("\n[bold green]✅ Deploy config generated![/bold green]")
+        console.print("\n[bold]Files written:[/bold]")
+        for f in result["files_written"]:
+            console.print(f"  📄 {f}")
+
+        console.print("\n[bold]Next steps:[/bold]")
+        for i, step in enumerate(result["next_steps"], 1):
+            console.print(f"  {i}. {step}")
+
+    except GenerationError as e:
+        exit_with_error(e, "Generating deploy config")
+    except (APIError, ConfigError) as e:
+        exit_with_error(e, "Checking configuration")
+
+
+@cli.command()
+def serve():
+    """Start the AnywhereCode MCP server for Claude integration."""
+    console.print("[bold cyan]🔌 Starting AnywhereCode MCP server...[/bold cyan]")
+    console.print("[dim]Claude can now call: list_templates, generate_plan, generate_project[/dim]")
+
+    try:
+        from anyplace.mcp.server import mcp
+        mcp.run()
+    except ImportError:
+        console.print("[bold red]MCP package not installed.[/bold red]")
+        console.print("Run: [bold]pip install 'mcp>=1.0.0'[/bold]")
 
 
 if __name__ == "__main__":

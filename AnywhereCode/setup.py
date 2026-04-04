@@ -14,6 +14,9 @@ setup(
         "rich>=13.0.0",
         "requests>=2.28.0",
     ],
+    extras_require={
+        "mcp": ["mcp>=1.0.0"],  # Only needed for `anyplace serve`
+    },
     entry_points={
         "console_scripts": [
             "anyplace=anyplace.cli.main:cli",

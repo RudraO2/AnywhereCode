@@ -5,6 +5,7 @@ End-to-end test for AnywhereCode.
 Tests the complete workflow: Plan → Approval → Generation → Git
 """
 
+import json
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -14,6 +15,10 @@ from anyplace.core.plan_generator import PlanGenerator
 from anyplace.core.build_orchestrator import BuildOrchestrator
 from anyplace.cli.progress import GenerationProgress
 from anyplace.cli.error_handler import GenerationError, APIError
+from anyplace.core.commit_generator import CommitGenerator
+from anyplace.core.build_runner import BuildRunner
+from anyplace.core.hooks_injector import HooksInjector
+from anyplace.core.deploy_generator import DeployGenerator
 
 
 def test_plan_generation():
@@ -234,6 +239,234 @@ def test_git_integration():
             return False
 
 
+def test_commit_generator():
+    """Test commit message generation from a git diff."""
+    print("\n" + "=" * 70)
+    print("TEST 5: Commit Message Generator")
+    print("=" * 70)
+
+    fixture_diff = """diff --git a/src/App.tsx b/src/App.tsx
+index abc123..def456 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,5 +1,10 @@
++import { useState } from 'react'
+ function App() {
+-  return <div>Hello</div>
++  const [dark, setDark] = useState(false)
++  return <div className={dark ? 'dark' : ''}>Hello</div>
+ }"""
+
+    try:
+        mock_llm = MockLLMProvider()
+        commit_gen = CommitGenerator(mock_llm)
+
+        message = commit_gen.generate_message(fixture_diff)
+
+        assert message, "Commit message should not be empty"
+        assert ":" in message, f"Expected conventional commit format with ':', got: {message!r}"
+
+        print(f"✅ Commit message generated")
+        print(f"   Message: {message.splitlines()[0]}")
+        return True
+
+    except Exception as e:
+        print(f"❌ Commit generator test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_build_runner_detection():
+    """Test project type detection from package.json."""
+    print("\n" + "=" * 70)
+    print("TEST 6: Build Runner Detection")
+    print("=" * 70)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            # Test Expo detection
+            expo_dir = Path(tmpdir) / "expo-project"
+            expo_dir.mkdir()
+            (expo_dir / "package.json").write_text(
+                json.dumps({"dependencies": {"expo": "^50.0.0", "react": "^18.0.0"}})
+            )
+            runner = BuildRunner(expo_dir)
+            detected = runner._detect_project_type()
+            assert detected == "expo-rn", f"Expected 'expo-rn', got '{detected}'"
+            print(f"✅ Expo project detected: {detected}")
+
+            # Test Vite/React detection
+            vite_dir = Path(tmpdir) / "vite-project"
+            vite_dir.mkdir()
+            (vite_dir / "package.json").write_text(
+                json.dumps({"devDependencies": {"vite": "^5.0.0"}})
+            )
+            runner2 = BuildRunner(vite_dir)
+            detected2 = runner2._detect_project_type()
+            assert detected2 == "react-vite", f"Expected 'react-vite', got '{detected2}'"
+            print(f"✅ React/Vite project detected: {detected2}")
+
+            # Test Node.js detection
+            node_dir = Path(tmpdir) / "node-project"
+            node_dir.mkdir()
+            (node_dir / "package.json").write_text(
+                json.dumps({"dependencies": {"express": "^4.0.0"}})
+            )
+            runner3 = BuildRunner(node_dir)
+            detected3 = runner3._detect_project_type()
+            assert detected3 == "nodejs", f"Expected 'nodejs', got '{detected3}'"
+            print(f"✅ Node.js project detected: {detected3}")
+
+            return True
+
+        except Exception as e:
+            print(f"❌ Build runner detection failed: {e}")
+            return False
+
+
+def test_hooks_injector():
+    """Test Claude Code hooks injection into a project directory."""
+    print("\n" + "=" * 70)
+    print("TEST 7: Hooks Injector")
+    print("=" * 70)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            project_dir = Path(tmpdir) / "test-project"
+            project_dir.mkdir()
+
+            injector = HooksInjector(project_dir)
+            result = injector.inject(project_type="react-vite")
+
+            settings_path = project_dir / ".claude" / "settings.json"
+            assert settings_path.exists(), ".claude/settings.json not created"
+
+            settings = json.loads(settings_path.read_text())
+            assert "hooks" in settings, "settings.json missing 'hooks' key"
+            assert "PostToolUse" in settings["hooks"], "Missing PostToolUse hook"
+            assert "PostSaveFiles" in settings["hooks"], "Missing PostSaveFiles hook"
+            print("✅ .claude/settings.json created with hooks")
+
+            build_cmd = project_dir / ".claude" / "commands" / "build.md"
+            assert build_cmd.exists(), ".claude/commands/build.md not created"
+            print("✅ .claude/commands/ created with slash commands")
+
+            commands_dir = project_dir / ".claude" / "commands"
+            cmd_files = list(commands_dir.glob("*.md"))
+            print(f"   Commands: {[f.name for f in cmd_files]}")
+
+            return True
+
+        except Exception as e:
+            print(f"❌ Hooks injector test failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+
+def test_deploy_generator_eas():
+    """Test EAS config generation for Expo projects."""
+    print("\n" + "=" * 70)
+    print("TEST 8: Deploy Generator (EAS)")
+    print("=" * 70)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            project_dir = Path(tmpdir) / "expo-app"
+            project_dir.mkdir()
+            (project_dir / "package.json").write_text(
+                json.dumps({"dependencies": {"expo": "^50.0.0"}})
+            )
+
+            mock_llm = MockLLMProvider()
+            deploy_gen = DeployGenerator(project_dir, mock_llm)
+            result = deploy_gen.deploy("eas")
+
+            eas_path = project_dir / "eas.json"
+            assert eas_path.exists(), "eas.json was not created"
+
+            eas_config = json.loads(eas_path.read_text())
+            assert "build" in eas_config, "eas.json missing 'build' key"
+            assert "production" in eas_config["build"], "eas.json missing 'production' build profile"
+
+            assert len(result["files_written"]) > 0, "No files listed in result"
+            assert len(result["next_steps"]) > 0, "No next steps in result"
+            print(f"✅ eas.json generated with build profiles: {list(eas_config['build'].keys())}")
+            print(f"   Next steps: {len(result['next_steps'])}")
+            return True
+
+        except Exception as e:
+            print(f"❌ Deploy generator test failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+
+def test_build_orchestrator_injects_hooks():
+    """Test that BuildOrchestrator injects Claude Code hooks after project generation."""
+    print("\n" + "=" * 70)
+    print("TEST 9: BuildOrchestrator Injects Claude Hooks")
+    print("=" * 70)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            from anyplace.core.plan_generator import ProjectPlan, FileInfo
+
+            files = [
+                FileInfo(
+                    path="package.json",
+                    description="Project dependencies",
+                    file_type="config",
+                    dependencies=[],
+                ),
+                FileInfo(
+                    path="README.md",
+                    description="Documentation",
+                    file_type="doc",
+                    dependencies=[],
+                ),
+            ]
+
+            plan = ProjectPlan(
+                project_name="hooks-test",
+                template="web-react-vite",
+                description="Test hook injection",
+                tech_stack=["React", "Vite"],
+                files=files,
+                key_features=["Hooks test"],
+                estimated_time="1 min",
+                architecture_notes="Minimal test project",
+                next_steps=["Run npm install"],
+            )
+
+            mock_llm = MockLLMProvider()
+            orchestrator = BuildOrchestrator(
+                plan=plan,
+                llm_provider=mock_llm,
+                project_dir=Path(tmpdir) / "hooks-test",
+                use_git=False,
+            )
+
+            success = orchestrator.build()
+            assert success, "Build returned False"
+
+            project_dir = Path(tmpdir) / "hooks-test"
+            settings_path = project_dir / ".claude" / "settings.json"
+            assert settings_path.exists(), ".claude/settings.json not found after build"
+
+            settings = json.loads(settings_path.read_text())
+            assert "hooks" in settings, "settings.json missing hooks"
+            print("✅ Claude hooks injected automatically after build")
+            return True
+
+        except Exception as e:
+            print(f"❌ Hook injection test failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+
 def run_full_workflow():
     """Run complete end-to-end workflow."""
     print("\n" + "=" * 70)
@@ -244,6 +477,11 @@ def run_full_workflow():
         "plan_generation": test_plan_generation(),
         "plan_approval": test_plan_approval(),
         "git_integration": test_git_integration(),
+        "commit_generator": test_commit_generator(),
+        "build_runner_detection": test_build_runner_detection(),
+        "hooks_injector": test_hooks_injector(),
+        "deploy_generator_eas": test_deploy_generator_eas(),
+        "orchestrator_hooks": test_build_orchestrator_injects_hooks(),
     }
 
     # Generate code with the plan
@@ -264,6 +502,11 @@ def print_summary(results: dict):
         ("Plan Approval", results.get("plan_approval", False)),
         ("Code Generation", results.get("code_generation", False)),
         ("Git Integration", results.get("git_integration", False)),
+        ("Commit Generator", results.get("commit_generator", False)),
+        ("Build Runner Detection", results.get("build_runner_detection", False)),
+        ("Hooks Injector", results.get("hooks_injector", False)),
+        ("Deploy Generator (EAS)", results.get("deploy_generator_eas", False)),
+        ("Orchestrator Injects Hooks", results.get("orchestrator_hooks", False)),
     ]
 
     passed = 0
@@ -286,7 +529,7 @@ def print_summary(results: dict):
 
 if __name__ == "__main__":
     print("\n" + "🚀 " * 20)
-    print("ANYWHERECOMDE END-TO-END TEST SUITE")
+    print("ANYWHEREPLACE END-TO-END TEST SUITE")
     print("🚀 " * 20)
 
     results = run_full_workflow()

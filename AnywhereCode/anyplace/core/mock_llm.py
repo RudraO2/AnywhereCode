@@ -28,8 +28,14 @@ class MockLLMProvider:
         """Generate mock text."""
         self.call_count += 1
 
+        # Check Phase 4 prompts first (before file-type checks, since diffs may contain filenames)
+        if prompt.startswith("Write a commit message for this diff:"):
+            return self._mock_commit_message()
+        elif "github actions" in prompt.lower() or "workflow" in prompt.lower():
+            return self._mock_github_workflow()
+
         # Return appropriate content based on file type
-        if "package.json" in prompt:
+        elif "package.json" in prompt:
             return self._mock_package_json()
         elif "tsconfig.json" in prompt:
             return self._mock_tsconfig()
@@ -259,6 +265,33 @@ export const config = {
   debug: true,
   version: '0.1.0',
 }
+"""
+
+    @staticmethod
+    def _mock_commit_message() -> str:
+        return (
+            "feat(ui): add responsive layout and dark mode support\n\n"
+            "Implemented CSS grid-based responsive layout and added dark mode toggle "
+            "with localStorage persistence."
+        )
+
+    @staticmethod
+    def _mock_github_workflow() -> str:
+        return """name: Deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm run build
+      # TODO: add deploy step (e.g. upload to S3, deploy to Vercel, etc.)
 """
 
     @staticmethod
