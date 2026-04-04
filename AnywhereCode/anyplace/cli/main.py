@@ -124,66 +124,73 @@ def main():
 
         console.print(Panel(summary, title="✨ Project Summary", border_style="green"))
 
-        # Generate plan
-        try:
-            console.print("\n[bold cyan]🤖 Generating project plan...[/bold cyan]")
-            api_mgr = APIManager()
-            llm = LLMProvider(api_mgr)
-            generator = PlanGenerator(llm)
+        # Generate plan (loop allows retry on GenerationError)
+        while True:
+            try:
+                console.print("\n[bold cyan]🤖 Generating project plan...[/bold cyan]")
+                api_mgr = APIManager()
+                llm = LLMProvider(api_mgr)
+                generator = PlanGenerator(llm)
 
-            plan = generator.generate_plan(
-                template_name=selected_template,
-                project_name=project_name,
-                description=project_desc,
-            )
+                plan = generator.generate_plan(
+                    template_name=selected_template,
+                    project_name=project_name,
+                    description=project_desc,
+                )
 
-            console.print("[bold green]✅ Plan generated![/bold green]")
+                console.print("[bold green]✅ Plan generated![/bold green]")
 
-            # Show plan for approval
-            if show_plan_approval_screen(plan):
-                # Build project
-                try:
-                    orchestrator = BuildOrchestrator(
-                        plan=plan,
-                        llm_provider=llm,
-                        use_git=True,
-                    )
+                # Show plan for approval
+                if show_plan_approval_screen(plan):
+                    # Build project
+                    try:
+                        orchestrator = BuildOrchestrator(
+                            plan=plan,
+                            llm_provider=llm,
+                            use_git=True,
+                        )
 
-                    progress = GenerationProgress(len(plan.files), project_name)
-                    progress.show_generation_start()
+                        progress = GenerationProgress(len(plan.files), project_name)
+                        progress.show_generation_start()
 
-                    # Generate with progress callback
-                    success = orchestrator.build(
-                        progress_callback=progress.show_file_progress,
-                    )
+                        # Generate with progress callback
+                        success = orchestrator.build(
+                            progress_callback=progress.show_file_progress,
+                        )
 
-                    if success:
-                        project_info = orchestrator.get_project_info()
-                        progress.show_generation_complete(project_info["project_dir"])
+                        if success:
+                            project_info = orchestrator.get_project_info()
+                            progress.show_generation_complete(project_info["project_dir"])
 
-                        console.print("\n[bold]Next steps:[/bold]")
-                        for i, step in enumerate(plan.next_steps, 1):
-                            console.print(f"  {i}. {step}")
+                            console.print("\n[bold]Next steps:[/bold]")
+                            for i, step in enumerate(plan.next_steps, 1):
+                                console.print(f"  {i}. {step}")
 
-                except (GenerationError, APIError) as e:
-                    progress.show_generation_error(str(e))
-                    if click.confirm("\nKeep generated files for manual review?"):
-                        pass  # Keep files
-                    else:
-                        console.print("[dim]Files cleaned up[/dim]")
+                    except (GenerationError, APIError) as e:
+                        progress.show_generation_error(str(e))
+                        if click.confirm("\nKeep generated files for manual review?"):
+                            pass  # Keep files
+                        else:
+                            console.print("[dim]Files cleaned up[/dim]")
 
-            else:
-                console.print("[yellow]Generation cancelled[/yellow]")
+                else:
+                    console.print("[yellow]Generation cancelled[/yellow]")
 
-        except APIError as e:
-            exit_with_error(e, "Connecting to LLM provider")
-        except GenerationError as e:
-            display_plan_error(str(e))
-            if click.confirm("\nTry again with different parameters?"):
-                # Recursively call main to restart
-                return
-        except click.Abort:
-            console.print("[yellow]Cancelled[/yellow]")
+                break  # Done - exit retry loop
+
+            except APIError as e:
+                exit_with_error(e, "Connecting to LLM provider")
+                break
+            except GenerationError as e:
+                display_plan_error(str(e))
+                if click.confirm("\nTry again with different parameters?"):
+                    project_name = click.prompt("\n📁 Project name", default=project_name, type=str)
+                    project_desc = click.prompt("\n📝 Project description (optional)", default=project_desc, type=str, show_default=False)
+                    continue  # Retry
+                break
+            except click.Abort:
+                console.print("[yellow]Cancelled[/yellow]")
+                break
 
     except ConfigError as e:
         exit_with_error(e, "Checking configuration")

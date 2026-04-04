@@ -193,7 +193,7 @@ def validate_api_key(api_key: str, provider: str) -> bool:
     if provider == "claude":
         return api_key.startswith("sk-ant-")
     elif provider == "gemini":
-        return api_key.startswith("AIza") or api_key.startswith("AIza")
+        return api_key.startswith("AIza")
     elif provider == "openrouter":
         return api_key.startswith("sk-or-")
     elif provider == "custom":

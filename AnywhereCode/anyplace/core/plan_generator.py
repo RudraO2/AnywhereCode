@@ -95,6 +95,11 @@ class PlanGenerator:
             # Parse and validate plan
             plan = self._parse_plan_response(plan_json, template_name, project_name)
 
+            if not self.validate_plan(plan):
+                raise GenerationError(
+                    "Generated plan is invalid: missing required fields or unresolved file dependencies."
+                )
+
             return plan
 
         except APIError as e:
@@ -311,8 +316,8 @@ if __name__ == "__main__":
         # Test sorting
         sorted_files = generator.topological_sort_files(plan.files)
         print(f"\nFile generation order:")
-        for f in sorted_files:
-            print(f"  1. {f.path}")
+        for i, f in enumerate(sorted_files, 1):
+            print(f"  {i}. {f.path}")
 
     except Exception as e:
         print(f"Error: {e}")

@@ -138,15 +138,17 @@ class CodeGenerator:
                 max_tokens=4096,
             )
 
-            # Clean up markdown wrappers if present
+            # Clean up markdown wrappers if present - extract first code block only
             if "```" in content:
                 lines = content.split("\n")
-                # Find code blocks and extract
                 in_code = False
                 code_lines = []
                 for line in lines:
                     if line.strip().startswith("```"):
-                        in_code = not in_code
+                        if not in_code:
+                            in_code = True  # Enter first code block
+                        else:
+                            break  # Exit first code block and stop
                     elif in_code:
                         code_lines.append(line)
 

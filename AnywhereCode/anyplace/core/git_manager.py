@@ -189,10 +189,8 @@ Thumbs.db
 
             # Check for actual errors
             if result.returncode != 0:
-                # Only treat as error if it contains error messages
-                stderr = result.stderr
-                if "fatal:" in stderr or ("error:" in stderr and "fatal:" not in stderr):
-                    raise GenerationError(stderr)
+                error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown git error"
+                raise GenerationError(error_msg)
 
             return result.stdout
 
