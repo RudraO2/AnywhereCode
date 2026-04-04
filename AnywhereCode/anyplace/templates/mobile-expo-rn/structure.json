@@ -1,0 +1,22 @@
+{
+  "name": "mobile-expo-rn",
+  "type": "mobile",
+  "description": "Cross-platform mobile app with React Native & Expo",
+  "tech_stack": ["React Native", "Expo", "TypeScript"],
+  "files_to_generate": [
+    "app.json",
+    "eas.json",
+    "package.json",
+    "tsconfig.json",
+    "app/_layout.tsx",
+    "app/index.tsx",
+    "app.json"
+  ],
+  "key_features": [
+    "One codebase for iOS & Android",
+    "Easy deployment via EAS Build",
+    "Hot reload during development",
+    "Native performance"
+  ],
+  "estimated_time": "15 minutes"
+}

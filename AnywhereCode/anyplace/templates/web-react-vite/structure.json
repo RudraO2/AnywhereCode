@@ -1,0 +1,23 @@
+{
+  "name": "web-react-vite",
+  "type": "web",
+  "description": "Single-page app with React & Vite",
+  "tech_stack": ["React", "Vite", "TypeScript"],
+  "files_to_generate": [
+    "index.html",
+    "src/main.tsx",
+    "src/App.tsx",
+    "src/index.css",
+    "src/vite-env.d.ts",
+    "vite.config.ts",
+    "tsconfig.json",
+    "package.json"
+  ],
+  "key_features": [
+    "Component-based architecture",
+    "Fast HMR with Vite",
+    "TypeScript support",
+    "Modern JavaScript"
+  ],
+  "estimated_time": "10 minutes"
+}
