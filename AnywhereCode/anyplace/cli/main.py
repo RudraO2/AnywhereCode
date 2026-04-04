@@ -17,7 +17,9 @@ from anyplace.cli.config_wizard import configure_providers
 from anyplace.cli.templates import list_available_templates, get_template_info
 from anyplace.core.plan_generator import PlanGenerator
 from anyplace.core.llm_provider import LLMProvider
+from anyplace.core.build_orchestrator import BuildOrchestrator
 from anyplace.cli.plan_preview import show_plan_approval_screen, display_plan_error
+from anyplace.cli.progress import GenerationProgress
 
 console = Console()
 
@@ -139,14 +141,37 @@ def main():
 
             # Show plan for approval
             if show_plan_approval_screen(plan):
-                console.print("\n[bold cyan]🚀 Generating project files...[/bold cyan]")
-                # TODO: Implement actual file generation
-                console.print("\n[bold green]✅ Project created successfully![/bold green]")
-                console.print(f"  Location: {get_projects_dir() / project_name}")
-                console.print(f"  Files: {len(plan.files)}")
-                console.print("\n[bold]Next steps:[/bold]")
-                for i, step in enumerate(plan.next_steps, 1):
-                    console.print(f"  {i}. {step}")
+                # Build project
+                try:
+                    orchestrator = BuildOrchestrator(
+                        plan=plan,
+                        llm_provider=llm,
+                        use_git=True,
+                    )
+
+                    progress = GenerationProgress(len(plan.files), project_name)
+                    progress.show_generation_start()
+
+                    # Generate with progress callback
+                    success = orchestrator.build(
+                        progress_callback=progress.show_file_progress,
+                    )
+
+                    if success:
+                        project_info = orchestrator.get_project_info()
+                        progress.show_generation_complete(project_info["project_dir"])
+
+                        console.print("\n[bold]Next steps:[/bold]")
+                        for i, step in enumerate(plan.next_steps, 1):
+                            console.print(f"  {i}. {step}")
+
+                except (GenerationError, APIError) as e:
+                    progress.show_generation_error(str(e))
+                    if click.confirm("\nKeep generated files for manual review?"):
+                        pass  # Keep files
+                    else:
+                        console.print("[dim]Files cleaned up[/dim]")
+
             else:
                 console.print("[yellow]Generation cancelled[/yellow]")
 
