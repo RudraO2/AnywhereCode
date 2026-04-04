@@ -1,0 +1,23 @@
+{
+  "name": "backend-nodejs",
+  "type": "backend",
+  "description": "REST API with Node.js & Express",
+  "tech_stack": ["Node.js", "Express", "TypeScript"],
+  "files_to_generate": [
+    "package.json",
+    "tsconfig.json",
+    "src/index.ts",
+    "src/routes/index.ts",
+    "src/middleware/errorHandler.ts",
+    "src/config/database.ts",
+    ".env.example",
+    ".gitignore"
+  ],
+  "key_features": [
+    "RESTful API design",
+    "Async/await patterns",
+    "TypeScript support",
+    "Error handling middleware"
+  ],
+  "estimated_time": "15 minutes"
+}

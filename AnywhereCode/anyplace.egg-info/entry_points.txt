@@ -1,0 +1,2 @@
+[console_scripts]
+anyplace = anyplace.cli.main:cli

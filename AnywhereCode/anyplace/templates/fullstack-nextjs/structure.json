@@ -1,0 +1,30 @@
+{
+  "name": "fullstack-nextjs",
+  "type": "fullstack",
+  "description": "Full-stack app with Next.js, TypeScript & PostgreSQL",
+  "tech_stack": ["Next.js", "TypeScript", "PostgreSQL", "Prisma"],
+  "files_to_generate": [
+    "package.json",
+    "tsconfig.json",
+    "next.config.ts",
+    "app/layout.tsx",
+    "app/page.tsx",
+    "app/globals.css",
+    "app/api/health/route.ts",
+    "lib/db.ts",
+    "lib/auth.ts",
+    "components/ui/Button.tsx",
+    "prisma/schema.prisma",
+    ".env.example",
+    ".gitignore"
+  ],
+  "key_features": [
+    "App Router with Server Components",
+    "API routes co-located with pages",
+    "Prisma ORM with PostgreSQL",
+    "TypeScript end-to-end",
+    "Ready for NextAuth.js",
+    "Optimized images with next/image"
+  ],
+  "estimated_time": "20 minutes"
+}
