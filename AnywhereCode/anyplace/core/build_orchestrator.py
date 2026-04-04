@@ -75,6 +75,15 @@ class BuildOrchestrator:
                     "Or disable git with --no-git flag"
                 )
 
+            # Create project directory first (needed for git init)
+            try:
+                self.code_generator.project_dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError:
+                raise GenerationError(
+                    f"Project directory already exists: {self.code_generator.project_dir}\n"
+                    f"Choose a different project name or delete the existing directory."
+                )
+
             # Initialize git repo
             if self.use_git:
                 self.git_manager.init_repo()

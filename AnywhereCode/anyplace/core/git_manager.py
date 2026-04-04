@@ -187,21 +187,24 @@ Thumbs.db
                 check=False,
             )
 
+            # Check for actual errors
             if result.returncode != 0:
-                # Some git commands return non-zero but succeed (like no changes to commit)
-                # Only raise for actual errors
-                if "fatal" in result.stderr.lower() or "error" in result.stderr.lower():
-                    raise GenerationError(result.stderr)
+                # Only treat as error if it contains error messages
+                stderr = result.stderr
+                if "fatal:" in stderr or ("error:" in stderr and "fatal:" not in stderr):
+                    raise GenerationError(stderr)
 
             return result.stdout
 
-        except subprocess.CalledProcessError as e:
-            raise GenerationError(f"Git error: {e.stderr}")
+        except GenerationError:
+            raise
         except FileNotFoundError:
             raise GenerationError(
                 "Git not installed or not in PATH.\n"
                 "Install git: https://git-scm.com/downloads"
             )
+        except Exception as e:
+            raise GenerationError(f"Git error: {e}")
 
     def check_git_installed(self) -> bool:
         """Check if git is installed."""

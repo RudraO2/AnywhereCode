@@ -66,17 +66,13 @@ class CodeGenerator:
         Raises:
             GenerationError: If generation fails
         """
-        try:
-            # Create project directory
-            self.project_dir.mkdir(parents=True, exist_ok=False)
-
-        except FileExistsError:
-            raise GenerationError(
-                f"Project directory already exists: {self.project_dir}\n"
-                f"Choose a different project name or delete the existing directory."
-            )
-        except Exception as e:
-            raise GenerationError(f"Can't create project directory: {e}")
+        # Project directory should already exist (created by BuildOrchestrator)
+        # If called standalone, create it
+        if not self.project_dir.exists():
+            try:
+                self.project_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                raise GenerationError(f"Can't create project directory: {e}")
 
         # Generate files in order
         total_files = len(self.plan.files)
