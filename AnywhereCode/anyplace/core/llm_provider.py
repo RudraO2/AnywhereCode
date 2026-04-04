@@ -69,12 +69,8 @@ def _call_gemini(
         f"/{model}:generateContent?key={api_key}"
     )
 
-    # Gemini uses a flat contents list; inject system as a leading exchange
+    # Contents: user/model turns only (no fake system injection)
     contents = []
-    if system:
-        contents.append({"role": "user", "parts": [{"text": f"[System context]\n{system}"}]})
-        contents.append({"role": "model", "parts": [{"text": "Understood."}]})
-
     for msg in user_messages:
         role = "user" if msg["role"] == "user" else "model"
         contents.append({"role": role, "parts": [{"text": msg["content"]}]})
@@ -86,13 +82,29 @@ def _call_gemini(
     if json_mode:
         gen_config["responseMimeType"] = "application/json"
 
-    body = {"contents": contents, "generationConfig": gen_config}
+    body: Dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": gen_config,
+    }
+
+    # Use Gemini's dedicated systemInstruction field (cleaner than fake turn injection)
+    sys_text = system or ""
+    if json_mode:
+        sys_text = (
+            sys_text
+            + "\nReturn ONLY a raw JSON object — no markdown fences, no explanation, no extra text."
+        ).strip()
+    if sys_text:
+        body["systemInstruction"] = {"parts": [{"text": sys_text}]}
 
     resp = requests.post(url, json=body, timeout=120)
     resp.raise_for_status()
 
     data = resp.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError):
+        raise APIError(f"Unexpected Gemini response: {data}")
 
 
 def _call_openai_compat(
@@ -303,10 +315,10 @@ class LLMProvider:
             json_mode=True,
         )
 
-        # Try multiple extraction strategies
+        # Try multiple extraction strategies — always yields a dict or None
         json_obj = self._extract_json_from_response(response)
         if json_obj is not None:
-            return json_obj
+            return json_obj  # already guaranteed to be a dict by _extract_json_from_response
 
         # If all extraction attempts fail, try requesting JSON again with stricter prompt
         strict_prompt = (
@@ -337,102 +349,72 @@ class LLMProvider:
             f"Response was: {response[:200]}..."
         )
 
+    def _as_dict(self, parsed: Any) -> Optional[Dict[str, Any]]:
+        """
+        Coerce a parsed JSON value to a dict, or return None.
+
+        If the LLM returned a list with one dict inside (e.g. Gemini sometimes
+        wraps the object in an array), unwrap it automatically.
+        """
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list):
+            # Unwrap single-element list containing a dict
+            if len(parsed) == 1 and isinstance(parsed[0], dict):
+                return parsed[0]
+            # List of dicts — merge them (edge case, rarely correct but better than crash)
+            merged: Dict[str, Any] = {}
+            for item in parsed:
+                if isinstance(item, dict):
+                    merged.update(item)
+            if merged:
+                return merged
+        return None
+
     def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
         """
-        Extract JSON from various response formats.
+        Extract a JSON *object* (dict) from various response formats.
 
-        Handles:
-        - Plain JSON
-        - JSON in markdown code blocks
-        - JSON with surrounding text
-        - Partial JSON
-
-        Returns:
-            Parsed dict if found, None otherwise
+        Always returns a dict or None — never returns a list, so callers
+        can safely call .get() without a TypeError.
         """
-        # Strategy 1: Try parsing as-is
+        if not response or not response.strip():
+            return None
+
+        # Strategy 1: parse as-is
         try:
-            return json.loads(response)
+            return self._as_dict(json.loads(response))
         except json.JSONDecodeError:
             pass
 
-        # Strategy 2: Strip markdown fences
-        if "```json" in response:
-            try:
-                json_str = response.split("```json")[1].split("```")[0].strip()
-                return json.loads(json_str)
-            except (json.JSONDecodeError, IndexError):
-                pass
-
-        if "```" in response:
-            try:
-                json_str = response.split("```")[1].split("```")[0].strip()
-                return json.loads(json_str)
-            except (json.JSONDecodeError, IndexError):
-                pass
-
-        # Strategy 3: Find JSON by looking for opening/closing braces
-        response_stripped = response.strip()
-        if response_stripped.startswith("{") or response_stripped.startswith("["):
-            # Find the closing brace/bracket
-            try:
-                if response_stripped.startswith("{"):
-                    # Find matching closing brace
-                    depth = 0
-                    for i, char in enumerate(response_stripped):
-                        if char == "{":
-                            depth += 1
-                        elif char == "}":
-                            depth -= 1
-                            if depth == 0:
-                                json_str = response_stripped[:i+1]
-                                return json.loads(json_str)
-                elif response_stripped.startswith("["):
-                    # Find matching closing bracket
-                    depth = 0
-                    for i, char in enumerate(response_stripped):
-                        if char == "[":
-                            depth += 1
-                        elif char == "]":
-                            depth -= 1
-                            if depth == 0:
-                                json_str = response_stripped[:i+1]
-                                return json.loads(json_str)
-            except (json.JSONDecodeError, IndexError):
-                pass
-
-        # Strategy 4: Look for JSON object/array anywhere in the response
-        for start_idx in range(len(response)):
-            if response[start_idx] in ("{", "["):
+        # Strategy 2: strip markdown fences
+        for fence in ("```json", "```"):
+            if fence in response:
                 try:
-                    # Try to parse from this position onward
-                    json_str = response[start_idx:]
-                    return json.loads(json_str)
-                except json.JSONDecodeError:
-                    # Try with truncation (find closing brace/bracket)
-                    try:
-                        if response[start_idx] == "{":
-                            depth = 0
-                            for i in range(start_idx, len(response)):
-                                if response[i] == "{":
-                                    depth += 1
-                                elif response[i] == "}":
-                                    depth -= 1
-                                    if depth == 0:
-                                        json_str = response[start_idx:i+1]
-                                        return json.loads(json_str)
-                        elif response[start_idx] == "[":
-                            depth = 0
-                            for i in range(start_idx, len(response)):
-                                if response[i] == "[":
-                                    depth += 1
-                                elif response[i] == "]":
-                                    depth -= 1
-                                    if depth == 0:
-                                        json_str = response[start_idx:i+1]
-                                        return json.loads(json_str)
-                    except (json.JSONDecodeError, IndexError):
-                        continue
+                    inner = response.split(fence)[1].split("```")[0].strip()
+                    return self._as_dict(json.loads(inner))
+                except (json.JSONDecodeError, IndexError):
+                    pass
+
+        # Strategy 3: find the first '{' and walk to its matching '}'
+        for start_idx, ch in enumerate(response):
+            if ch != "{":
+                continue
+            depth = 0
+            for end_idx in range(start_idx, len(response)):
+                if response[end_idx] == "{":
+                    depth += 1
+                elif response[end_idx] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            candidate = response[start_idx:end_idx + 1]
+                            result = self._as_dict(json.loads(candidate))
+                            if result:
+                                return result
+                        except json.JSONDecodeError:
+                            pass
+                        break  # Move on to next '{'
 
         return None
 

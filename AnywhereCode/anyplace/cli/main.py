@@ -52,10 +52,92 @@ def cli():
     pass
 
 
+def _show_existing_project_menu():
+    """
+    Let the user pick an existing project and show available actions.
+    Returns True if handled, False if user wants to go back.
+    """
+    from pathlib import Path
+    projects_dir = get_projects_dir()
+
+    # Collect existing projects (any directory inside projects_dir)
+    if not projects_dir.exists():
+        console.print("[yellow]No projects directory found yet.[/yellow]")
+        return False
+
+    projects = [p for p in sorted(projects_dir.iterdir()) if p.is_dir()]
+
+    if not projects:
+        console.print("[yellow]No existing projects found in:[/yellow]")
+        console.print(f"  {projects_dir}")
+        return False
+
+    console.print("[bold cyan]📁 Your Existing Projects:[/bold cyan]\n")
+    for i, p in enumerate(projects, 1):
+        # Quick status: does it have .git?
+        git_mark = "🔀" if (p / ".git").exists() else "  "
+        # Count generated source files (rough estimate)
+        try:
+            file_count = sum(1 for _ in p.rglob("*") if _.is_file()
+                             and not any(part.startswith(".") for part in _.parts[-3:])
+                             and "node_modules" not in str(_))
+        except Exception:
+            file_count = 0
+        console.print(f"  {i}. {git_mark} [bold]{p.name}[/bold]  [dim]({file_count} files)[/dim]")
+
+    console.print(f"\n  0. ← Back to main menu")
+    choice = click.prompt("\nSelect project (number)", type=int, default=0)
+
+    if choice == 0 or choice > len(projects):
+        return False
+
+    project = projects[choice - 1]
+    console.print(f"\n[bold green]📂 {project.name}[/bold green] — {project}\n")
+
+    # Show what you can do
+    actions = [
+        ("commit",  "anyplace commit --dir",  "Generate AI commit message & commit"),
+        ("build",   "anyplace build --dir",   "Run the project build"),
+        ("deploy",  "anyplace deploy --dir",  "Generate deployment config"),
+        ("ci",      "anyplace ci --dir",      "Add CI/CD pipeline"),
+        ("docker",  "anyplace docker --dir",  "Add Docker config"),
+        ("env",     "anyplace env --dir",     "Manage environment variables"),
+        ("guide",   "anyplace guide --dir",   "Open learning guide"),
+        ("docs",    "anyplace docs --dir",    "Generate documentation"),
+        ("explain", "anyplace explain",       "Explain a file with AI"),
+    ]
+
+    console.print("[bold cyan]What do you want to do?[/bold cyan]\n")
+    for i, (cmd, _, desc) in enumerate(actions, 1):
+        console.print(f"  {i}. [bold]{cmd}[/bold] — {desc}")
+    console.print(f"\n  0. ← Back")
+
+    action_choice = click.prompt("\nChoose action (number)", type=int, default=0)
+    if action_choice == 0 or action_choice > len(actions):
+        return True  # Handled (went back)
+
+    cmd_name, _, _ = actions[action_choice - 1]
+    dir_str = str(project)
+
+    # Dispatch to the right command
+    import subprocess, sys
+    extra = []
+    if cmd_name == "explain":
+        filename = click.prompt("  File to explain (relative path)")
+        extra = [filename]
+
+    console.print(f"\n[dim]Running: anyplace {cmd_name} {' '.join(extra)} --dir \"{dir_str}\"[/dim]\n")
+    subprocess.run(
+        ["anyplace", cmd_name, *extra, "--dir", dir_str],
+        check=False,
+    )
+    return True
+
+
 @cli.command()
 def main():
     """
-    Interactive mode - Create a new project.
+    Interactive mode - Create a new project or continue an existing one.
 
     Guides you through project creation with AI assistance.
     """
@@ -68,6 +150,16 @@ def main():
         console.print("📱 [bold yellow]Termux Mode[/bold yellow] - Projects will save to ~/Downloads/\n")
     else:
         console.print(f"🖥️  Desktop Mode - Projects will save to {get_projects_dir()}\n")
+
+    # ── Top-level choice: new project OR continue existing ──────────────────
+    console.print("[bold]What would you like to do?[/bold]")
+    console.print("  1. 🆕 Create a new project")
+    console.print("  2. 📂 Continue an existing project")
+    top_choice = click.prompt("\nChoice", type=click.IntRange(1, 2), default=1)
+
+    if top_choice == 2:
+        _show_existing_project_menu()
+        return
 
     try:
         # Check API configuration
