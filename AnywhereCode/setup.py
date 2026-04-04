@@ -8,11 +8,10 @@ setup(
     packages=find_packages(),
     python_requires=">=3.8",
     install_requires=[
-        "litellm>=1.0.0",
+        "requests>=2.28.0",
         "click>=8.0.0",
         "pyyaml>=6.0",
         "rich>=13.0.0",
-        "requests>=2.28.0",
     ],
     extras_require={
         "mcp": ["mcp>=1.0.0"],  # Only needed for `anyplace serve`
