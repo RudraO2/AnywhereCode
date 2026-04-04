@@ -51,7 +51,11 @@ class LLMProvider:
 
         elif provider_name == "gemini":
             litellm.api_key = api_key
-            self.model = config.get("model", "gemini-2.0-flash")
+            model_name = config.get("model", "gemini-2.0-flash")
+            # Gemini models need "google/" prefix for LiteLLM
+            if not model_name.startswith("google/"):
+                model_name = f"google/{model_name}"
+            self.model = model_name
             self.provider = "gemini"
 
         elif provider_name == "openrouter":
