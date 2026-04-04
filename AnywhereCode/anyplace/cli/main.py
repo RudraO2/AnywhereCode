@@ -12,9 +12,12 @@ from pathlib import Path
 
 from anyplace.config.environment import get_platform_info, get_projects_dir
 from anyplace.config.api_manager import APIManager
-from anyplace.cli.error_handler import handle_error, exit_with_error, ConfigError
+from anyplace.cli.error_handler import handle_error, exit_with_error, ConfigError, GenerationError, APIError
 from anyplace.cli.config_wizard import configure_providers
 from anyplace.cli.templates import list_available_templates, get_template_info
+from anyplace.core.plan_generator import PlanGenerator
+from anyplace.core.llm_provider import LLMProvider
+from anyplace.cli.plan_preview import show_plan_approval_screen, display_plan_error
 
 console = Console()
 
@@ -119,16 +122,43 @@ def main():
 
         console.print(Panel(summary, title="✨ Project Summary", border_style="green"))
 
-        if click.confirm("\n✅ Create project with these settings?"):
-            console.print("\n[bold cyan]🚀 Generating project...[/bold cyan]")
-            console.print(f"  Using template: {selected_template}")
-            console.print(f"  Project: {project_name}")
-            # TODO: Implement actual project generation
-            console.print("\n[bold green]✅ Project created successfully![/bold green]")
-            console.print(f"  Location: {get_projects_dir() / project_name}")
-            console.print("  Next steps: cd into the project and start coding!")
-        else:
-            console.print("[yellow]Creation cancelled[/yellow]")
+        # Generate plan
+        try:
+            console.print("\n[bold cyan]🤖 Generating project plan...[/bold cyan]")
+            api_mgr = APIManager()
+            llm = LLMProvider(api_mgr)
+            generator = PlanGenerator(llm)
+
+            plan = generator.generate_plan(
+                template_name=selected_template,
+                project_name=project_name,
+                description=project_desc,
+            )
+
+            console.print("[bold green]✅ Plan generated![/bold green]")
+
+            # Show plan for approval
+            if show_plan_approval_screen(plan):
+                console.print("\n[bold cyan]🚀 Generating project files...[/bold cyan]")
+                # TODO: Implement actual file generation
+                console.print("\n[bold green]✅ Project created successfully![/bold green]")
+                console.print(f"  Location: {get_projects_dir() / project_name}")
+                console.print(f"  Files: {len(plan.files)}")
+                console.print("\n[bold]Next steps:[/bold]")
+                for i, step in enumerate(plan.next_steps, 1):
+                    console.print(f"  {i}. {step}")
+            else:
+                console.print("[yellow]Generation cancelled[/yellow]")
+
+        except APIError as e:
+            exit_with_error(e, "Connecting to LLM provider")
+        except GenerationError as e:
+            display_plan_error(str(e))
+            if click.confirm("\nTry again with different parameters?"):
+                # Recursively call main to restart
+                return
+        except click.Abort:
+            console.print("[yellow]Cancelled[/yellow]")
 
     except ConfigError as e:
         exit_with_error(e, "Checking configuration")
@@ -230,23 +260,45 @@ def reset():
 
 
 @cli.command()
-@click.option("--provider", help="Test a specific provider")
-def test():
+def test_providers():
     """Test LLM provider connectivity."""
-    console.print("[bold cyan]🧪 Testing API Connections...[/bold cyan]\n")
+    console.clear()
+    console.print(BANNER, style="cyan bold")
+    console.print("[bold cyan]🧪 Testing API Connections[/bold cyan]\n")
 
     try:
         api_mgr = APIManager()
         providers = api_mgr.list_providers()
 
         if not providers:
-            console.print("[yellow]No providers configured[/yellow]")
+            console.print("[yellow]⚠️  No providers configured[/yellow]")
+            console.print("Run: [bold]anyplace configure[/bold] to set up\n")
             return
 
+        all_ok = True
+
         for provider_name in providers:
-            console.print(f"Testing {provider_name.upper()}... ", end="", flush=True)
-            # TODO: Implement actual provider testing
-            console.print("[green]✅ OK[/green]")
+            config = api_mgr.get_provider(provider_name)
+            model = config.get("model", "unknown")
+
+            console.print(f"Testing {provider_name.upper()} ({model})... ", end="", flush=True)
+
+            try:
+                llm = LLMProvider(api_mgr)
+                if llm.test_connection():
+                    console.print("[green]✅ OK[/green]")
+                else:
+                    console.print("[yellow]⚠️  Connection test returned unexpected result[/yellow]")
+                    all_ok = False
+            except (APIError, ConfigError) as e:
+                console.print(f"[red]❌ Failed[/red]")
+                console.print(f"   Error: {e}\n")
+                all_ok = False
+
+        if all_ok:
+            console.print("\n[bold green]✅ All providers working![/bold green]")
+        else:
+            console.print("\n[bold yellow]⚠️  Some providers failed. Check your API keys.[/bold yellow]")
 
     except Exception as e:
         exit_with_error(e, "Testing providers")
@@ -258,4 +310,4 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         main()
     else:
-        cli()
+        cli(prog_name="anyplace")
