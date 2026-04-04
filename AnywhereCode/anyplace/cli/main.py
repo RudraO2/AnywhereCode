@@ -68,16 +68,22 @@ def _show_pipeline_results(result):
         console.print(f"\n[bold green]🎉 All done! {passed} passed, {skipped} skipped.[/bold green]")
         console.print(f"[bold]Your project is ready at:[/bold] {result.project_dir}")
         console.print("\n[bold cyan]What was done automatically:[/bold cyan]")
-        console.print("  • Dependencies installed")
-        console.print("  • Project built")
-        console.print("  • Environment configured (.env)")
-        console.print("  • CI/CD pipeline generated (GitHub Actions)")
-        console.print("  • Docker config generated")
-        console.print("  • Deployment config generated")
-        console.print("  • Everything committed to git")
-        console.print("\n[bold]To start developing:[/bold]")
-        console.print(f"  cd {result.project_dir}")
-        console.print("  # Your project is already set up — just start coding!")
+        console.print("  - Dependencies installed")
+        console.print("  - Project built")
+        console.print("  - Environment configured (.env)")
+        console.print("  - CI/CD pipeline generated (GitHub Actions)")
+        console.print("  - Docker config generated")
+        console.print("  - Deployment config generated")
+        console.print("  - Everything committed to git")
+
+        # Show server info if running
+        server_url = result.summary.get("server_url", "")
+        if server_url:
+            console.print(f"\n[bold green]🌐 Dev server running at:[/bold green] [bold]{server_url}[/bold]")
+            console.print("[dim]Press Ctrl+C to stop the server[/dim]")
+        else:
+            console.print(f"\n[bold]To start developing:[/bold]")
+            console.print(f"  cd {result.project_dir}")
     else:
         console.print(f"\n[yellow]⚠️ {passed} passed, {skipped} skipped, {failed} failed[/yellow]")
         console.print("[dim]Some steps failed but your project files are generated.[/dim]")
@@ -187,14 +193,23 @@ def _show_existing_project_menu():
 
 
 @cli.command()
-def main():
+@click.option("--auto", "auto_accept", is_flag=True, default=False,
+              help="Auto-accept all pipeline steps (no confirmations)")
+def main(auto_accept):
     """
     Interactive mode - Create a new project or continue an existing one.
 
     Guides you through project creation with AI assistance.
+    By default, asks for confirmation before each pipeline step (human-accept mode).
+    Use --auto to run everything without confirmations.
     """
     console.clear()
     console.print(BANNER, style="cyan bold")
+
+    if auto_accept:
+        console.print("[bold yellow]Mode: AUTO-ACCEPT[/bold yellow] — all steps run without confirmation\n")
+    else:
+        console.print("[dim]Mode: human-accept (you approve each step)[/dim]\n")
 
     # Check platform
     platform_info = get_platform_info()
@@ -305,6 +320,7 @@ def main():
                             llm_provider=llm,
                             use_git=True,
                             agentic=True,
+                            human_accept=not auto_accept,
                         )
 
                         progress = GenerationProgress(len(plan.files), project_name)
@@ -323,6 +339,8 @@ def main():
                             # Show agentic pipeline results
                             if orchestrator.pipeline_result:
                                 _show_pipeline_results(orchestrator.pipeline_result)
+                                # Wait for dev server if running
+                                _wait_for_server(orchestrator.pipeline_result)
                             else:
                                 # Fallback if agentic mode was off
                                 console.print("\n[bold]Next steps:[/bold]")
@@ -897,8 +915,10 @@ def explain(file, project_dir):
               default=".", show_default=True, help="Project directory")
 @click.option("--skip-deploy", is_flag=True, default=False,
               help="Skip deployment config generation")
-def run(project_dir, skip_deploy):
-    """Run the full agentic pipeline on an existing project (install, build, CI, Docker, deploy)."""
+@click.option("--auto", "auto_accept", is_flag=True, default=False,
+              help="Auto-accept all steps (no confirmations)")
+def run(project_dir, skip_deploy, auto_accept):
+    """Run the full agentic pipeline on an existing project (install, build, CI, Docker, deploy, serve)."""
     from pathlib import Path
     from anyplace.core.agent_executor import AgentExecutor
 
@@ -913,12 +933,16 @@ def run(project_dir, skip_deploy):
     executor = AgentExecutor(
         project_dir=path,
         progress_callback=agent_progress,
+        human_accept=not auto_accept,
     )
 
     console.print(f"[bold]Detected project type:[/bold] {executor.project_type}\n")
 
     result = executor.run_full_pipeline(skip_deploy=skip_deploy)
     _show_pipeline_results(result)
+
+    # If dev server is running, wait for Ctrl+C
+    _wait_for_server(result)
 
 
 @cli.command()
@@ -935,10 +959,36 @@ def serve():
         console.print("Run: [bold]pip install 'mcp>=1.0.0'[/bold]")
 
 
+def _wait_for_server(result):
+    """If a dev server process was started, wait for user to Ctrl+C."""
+    if not hasattr(result, 'server_process') or not result.server_process:
+        return
+
+    proc = result.server_process
+    if proc.poll() is not None:
+        return  # Already exited
+
+    console.print(f"\n[bold green]🌐 Dev server is running at {result.server_url}[/bold green]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+
+    try:
+        # Stream server output to console
+        for line in proc.stdout:
+            console.print(f"  [dim]{line.rstrip()}[/dim]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopping dev server...[/yellow]")
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+        console.print("[green]Server stopped.[/green]")
+
+
 if __name__ == "__main__":
-    # Show main interactive menu if no subcommand
+    # Just typing 'anyplace' with no args starts the interactive mode
     import sys
     if len(sys.argv) == 1:
-        main()
+        main(standalone_mode=False)
     else:
         cli(prog_name="anyplace")

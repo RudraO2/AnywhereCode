@@ -29,6 +29,7 @@ class BuildOrchestrator:
         project_dir: Optional[Path] = None,
         use_git: bool = True,
         agentic: bool = True,
+        human_accept: bool = True,
     ):
         """
         Initialize build orchestrator.
@@ -39,12 +40,14 @@ class BuildOrchestrator:
             project_dir: Custom project directory
             use_git: Whether to initialize git repository
             agentic: If True, auto-install deps, build, and setup deployment
+            human_accept: If True (default), ask user before each pipeline step
         """
         self.plan = plan
         self.llm_provider = llm_provider or LLMProvider()
         self.project_dir = project_dir
         self.use_git = use_git
         self.agentic = agentic
+        self.human_accept = human_accept
 
         self.code_generator: Optional[CodeGenerator] = None
         self.git_manager: Optional[GitManager] = None
@@ -197,6 +200,7 @@ class BuildOrchestrator:
         executor = AgentExecutor(
             project_dir=project_dir,
             progress_callback=callback,
+            human_accept=self.human_accept,
         )
 
         return executor.run_full_pipeline()

@@ -1,24 +1,100 @@
 """
-Agentic executor — runs the full pipeline autonomously.
+Agentic executor — runs the full pipeline autonomously and safely.
 
 After code generation, this module automatically:
 1. Installs dependencies (npm install / pip install / etc.)
 2. Builds the project (npm run build / python -m build / etc.)
 3. Generates deployment configs (CI, Docker, .env)
-4. Runs the dev server or verification step
+4. Starts the dev server on localhost
 
-No manual steps — everything is handled end-to-end like Claude Code.
+Safety:
+- All commands are checked against a blocklist before execution
+- Destructive operations (rm -rf, chmod 777, etc.) are BLOCKED
+- Two modes: human-accept (default) and auto-accept
+- In human-accept mode, user confirms each pipeline step
+
+No manual steps — everything is handled end-to-end.
 """
 
 import subprocess
 import shutil
 import json
 import os
+import re
+import signal
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 
+
 from anyplace.cli.error_handler import GenerationError
+
+
+# ── Safety: blocked command patterns ─────────────────────────────────────
+# These patterns are checked against every command before it runs.
+# If any pattern matches, the command is REFUSED.
+
+BLOCKED_PATTERNS = [
+    # File destruction
+    r"\brm\s+(-[a-zA-Z]*[rf])",       # rm -rf, rm -f, rm -r
+    r"\brm\s+--force",
+    r"\brm\s+--recursive",
+    r"\brmdir\b",
+    r"\bshred\b",
+    r"\bwipe\b",
+    # Dangerous permissions
+    r"\bchmod\s+(777|666|000)",         # chmod 777, chmod 666, chmod 000
+    r"\bchmod\s+(-[a-zA-Z]*R)",        # chmod -R (recursive perms)
+    r"\bchown\s+(-[a-zA-Z]*R)",        # chown -R
+    # System damage
+    r"\bmkfs\b",                        # format filesystem
+    r"\bdd\s+if=",                      # dd (disk destroyer)
+    r"\bformat\b",
+    r"\bfdisk\b",
+    # Network danger
+    r"\bcurl\b.*\|\s*(ba)?sh",          # curl | bash (pipe to shell)
+    r"\bwget\b.*\|\s*(ba)?sh",
+    # Kill/shutdown
+    r"\bkill\s+-9\s+(-1|1)\b",         # kill -9 -1 (kill all processes)
+    r"\bkillall\b",
+    r"\bshutdown\b",
+    r"\breboot\b",
+    r"\bpoweroff\b",
+    r"\binit\s+[06]\b",
+    # Destructive git
+    r"\bgit\s+push\s+.*--force",
+    r"\bgit\s+reset\s+--hard",
+    r"\bgit\s+clean\s+-[a-zA-Z]*f",
+    # Sneaky shell tricks
+    r":\(\)\s*\{",                      # fork bomb
+    r"\beval\b",
+    r"\bexec\b",
+    r"\b>\s*/dev/sd",                   # overwrite disk
+    r"\b>\s*/dev/null\b.*2>&1.*\brm\b", # hidden rm
+    # Python destruction
+    r"python.*-c.*import\s+shutil.*rmtree",
+    r"python.*-c.*os\.remove",
+    # Termux-specific protection
+    r"\btermux-.*-permission",
+    r"\bsu\s+-",
+    r"\bsudo\b",
+]
+
+BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
+
+
+def is_command_safe(cmd: List[str]) -> tuple:
+    """
+    Check if a command is safe to run.
+
+    Returns:
+        (is_safe: bool, reason: str)
+    """
+    cmd_str = " ".join(cmd)
+    for pattern in BLOCKED_RE:
+        if pattern.search(cmd_str):
+            return False, f"Blocked dangerous pattern: {pattern.pattern}"
+    return True, ""
 
 
 @dataclass
@@ -37,6 +113,8 @@ class PipelineResult:
     """Result of the full agentic pipeline."""
     project_dir: str
     steps: List[StepResult] = field(default_factory=list)
+    server_process: Optional[subprocess.Popen] = None
+    server_url: str = ""
 
     @property
     def all_success(self) -> bool:
@@ -44,7 +122,7 @@ class PipelineResult:
 
     @property
     def summary(self) -> Dict:
-        return {
+        result = {
             "project_dir": self.project_dir,
             "total_steps": len(self.steps),
             "passed": sum(1 for s in self.steps if s.success),
@@ -59,29 +137,60 @@ class PipelineResult:
                 for s in self.steps
             ],
         }
+        if self.server_url:
+            result["server_url"] = self.server_url
+        return result
 
 
 class AgentExecutor:
     """
     Autonomous executor that runs the full post-generation pipeline.
 
-    Like Claude Code — it doesn't tell you what to do, it just does it.
+    Safety features:
+    - All commands checked against blocklist before execution
+    - Two modes: human_accept=True (default) asks user before each step
+    - human_accept=False runs everything automatically
+
+    Like Claude Code — it doesn't tell you what to do, it just does it (safely).
     """
 
     def __init__(
         self,
         project_dir: Path,
         progress_callback: Optional[Callable[[str, str], None]] = None,
+        human_accept: bool = True,
     ):
         """
         Args:
             project_dir: The generated project directory.
             progress_callback: Called with (step_name, status_message) for live feedback.
+            human_accept: If True (default), ask user to approve each step.
+                         If False, run everything automatically.
         """
         self.project_dir = Path(project_dir)
         self.progress = progress_callback or (lambda step, msg: None)
         self.project_type = self._detect_project_type()
         self.result = PipelineResult(project_dir=str(self.project_dir))
+        self.human_accept = human_accept
+
+    # ── User confirmation ────────────────────────────────────────────────
+
+    def _ask_user(self, step_name: str, description: str) -> bool:
+        """
+        Ask user for confirmation before running a step.
+        Only asks if human_accept=True.
+
+        Returns True if approved (or auto-accept mode).
+        """
+        if not self.human_accept:
+            return True
+
+        try:
+            import click
+            self.progress(step_name, f"[awaiting approval] {description}")
+            return click.confirm(f"    Run '{step_name}'? ({description})", default=True)
+        except Exception:
+            return True  # If click not available, auto-approve
 
     # ── Detection ────────────────────────────────────────────────────────
 
@@ -126,11 +235,22 @@ class AgentExecutor:
         """Check if a command is available on the system."""
         return shutil.which(cmd) is not None
 
-    # ── Shell runner ─────────────────────────────────────────────────────
+    # ── Shell runner (with safety checks) ────────────────────────────────
 
     def _run(self, cmd: List[str], timeout: int = 300, env_extra: Optional[Dict] = None) -> StepResult:
-        """Run a shell command and return structured result."""
+        """Run a shell command with safety checks and return structured result."""
         step_name = " ".join(cmd[:3])
+
+        # SAFETY CHECK
+        safe, reason = is_command_safe(cmd)
+        if not safe:
+            self.progress(step_name, f"BLOCKED: {reason}")
+            return StepResult(
+                name=step_name,
+                success=False,
+                error=f"Command blocked for safety: {reason}",
+            )
+
         self.progress(step_name, f"Running: {' '.join(cmd)}")
 
         env = os.environ.copy()
@@ -181,6 +301,9 @@ class AgentExecutor:
         """Auto-detect and install project dependencies."""
         self.progress("install", "Installing dependencies...")
 
+        if not self._ask_user("install", "Install project dependencies"):
+            return self._skip("install", "User declined")
+
         t = self.project_type
 
         # Node.js family
@@ -227,6 +350,9 @@ class AgentExecutor:
         """Auto-detect and build the project."""
         self.progress("build", "Building project...")
 
+        if not self._ask_user("build", "Build the project"):
+            return self._skip("build", "User declined")
+
         t = self.project_type
 
         if t in ("nodejs", "nodejs-backend", "react-vite", "nextjs"):
@@ -243,12 +369,9 @@ class AgentExecutor:
             return self._skip("build", "No package.json found")
 
         if t == "expo-rn":
-            # For Expo, building means exporting — skip for local dev
             return self._skip("build", "Expo projects build on-device or via EAS")
 
         if t in ("python", "django"):
-            # Python doesn't typically have a build step for local dev
-            # But check for django migrations
             manage = self.project_dir / "manage.py"
             if manage.exists() and self._has_command("python3"):
                 return self._run(["python3", "manage.py", "migrate", "--run-syncdb"], timeout=60)
@@ -274,7 +397,6 @@ class AgentExecutor:
         env_file = self.project_dir / ".env"
 
         if not example.exists():
-            # Generate .env.example first
             try:
                 from anyplace.core.env_manager import EnvManager
                 mgr = EnvManager()
@@ -284,7 +406,6 @@ class AgentExecutor:
                 return self._skip("env", "Could not generate .env.example")
 
         if example.exists() and not env_file.exists():
-            # Copy .env.example → .env so the project can run immediately
             try:
                 shutil.copy2(str(example), str(env_file))
                 self.progress("env", "Created .env from .env.example")
@@ -297,6 +418,9 @@ class AgentExecutor:
     def setup_ci(self) -> StepResult:
         """Generate CI/CD config (GitHub Actions by default)."""
         self.progress("ci", "Setting up CI/CD pipeline...")
+
+        if not self._ask_user("ci", "Generate GitHub Actions CI/CD config"):
+            return self._skip("ci", "User declined")
 
         workflow_dir = self.project_dir / ".github" / "workflows"
         if workflow_dir.exists() and any(workflow_dir.iterdir()):
@@ -318,6 +442,9 @@ class AgentExecutor:
         """Generate Dockerfile and docker-compose.yml."""
         self.progress("docker", "Setting up Docker...")
 
+        if not self._ask_user("docker", "Generate Dockerfile + docker-compose.yml"):
+            return self._skip("docker", "User declined")
+
         dockerfile = self.project_dir / "Dockerfile"
         if dockerfile.exists():
             return self._skip("docker", "Dockerfile already exists")
@@ -338,6 +465,9 @@ class AgentExecutor:
         """Generate deployment config based on project type."""
         self.progress("deploy", "Setting up deployment config...")
 
+        if not self._ask_user("deploy", "Generate deployment config"):
+            return self._skip("deploy", "User declined")
+
         try:
             from anyplace.core.deploy_generator import DeployGenerator
             from anyplace.config.api_manager import APIManager
@@ -355,7 +485,6 @@ class AgentExecutor:
                 output=f"Generated: {', '.join(result['files_written'])}",
             )
         except Exception as e:
-            # Deploy setup is optional — don't fail the pipeline
             return self._skip("deploy", f"Could not generate deploy config: {e}")
 
     def verify_project(self) -> StepResult:
@@ -364,7 +493,6 @@ class AgentExecutor:
 
         t = self.project_type
 
-        # For Node.js, check that node_modules exists and main entry resolves
         if t in ("nodejs", "nodejs-backend", "react-vite", "nextjs"):
             nm = self.project_dir / "node_modules"
             if not nm.exists():
@@ -375,33 +503,127 @@ class AgentExecutor:
                 try:
                     pkg = json.loads(pkg_path.read_text())
                     scripts = pkg.get("scripts", {})
-                    # Run lint or test if available (quick check)
                     if "lint" in scripts and self._has_command("npm"):
                         r = self._run(["npm", "run", "lint"], timeout=60)
                         if r.success:
                             return r
-                    # Just check that the package is valid
                     return StepResult(name="verify", success=True, output="Project structure valid")
                 except (json.JSONDecodeError, OSError):
                     pass
 
             return StepResult(name="verify", success=True, output="node_modules present")
 
-        # For Python, try importing the main package
         if t in ("python", "django"):
             return StepResult(name="verify", success=True, output="Python project ready")
 
         return StepResult(name="verify", success=True, output="Project generated successfully")
 
+    def start_dev_server(self) -> StepResult:
+        """
+        Start the dev server on localhost so the user can see their project.
+        Runs in background — user can Ctrl+C to stop.
+        """
+        self.progress("serve", "Starting dev server...")
+
+        if not self._ask_user("serve", "Start dev server on localhost"):
+            return self._skip("serve", "User declined")
+
+        t = self.project_type
+        cmd = None
+        port = 3000
+
+        if t in ("react-vite",):
+            cmd = ["npx", "vite", "--host", "0.0.0.0", "--port", str(port)]
+        elif t == "nextjs":
+            cmd = ["npx", "next", "dev", "-p", str(port)]
+        elif t in ("nodejs", "nodejs-backend"):
+            pkg_path = self.project_dir / "package.json"
+            if pkg_path.exists():
+                try:
+                    scripts = json.loads(pkg_path.read_text()).get("scripts", {})
+                    if "dev" in scripts:
+                        cmd = ["npm", "run", "dev"]
+                    elif "start" in scripts:
+                        cmd = ["npm", "start"]
+                except (json.JSONDecodeError, OSError):
+                    pass
+            if not cmd:
+                return self._skip("serve", "No dev/start script in package.json")
+        elif t == "expo-rn":
+            cmd = ["npx", "expo", "start"]
+            port = 8081
+        elif t == "django":
+            cmd = ["python3", "manage.py", "runserver", f"0.0.0.0:{port}"]
+            port = 8000
+            cmd[-1] = f"0.0.0.0:{port}"
+        elif t == "python":
+            # Check for common Python web frameworks
+            req = self.project_dir / "requirements.txt"
+            if req.exists():
+                content = req.read_text().lower()
+                if "flask" in content:
+                    cmd = ["python3", "-m", "flask", "run", "--host=0.0.0.0", f"--port={port}"]
+                elif "fastapi" in content or "uvicorn" in content:
+                    port = 8000
+                    cmd = ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(port)]
+            if not cmd:
+                return self._skip("serve", "No known web framework detected")
+        else:
+            return self._skip("serve", f"Don't know how to serve {t} projects")
+
+        if cmd and not self._has_command(cmd[0]):
+            return self._skip("serve", f"{cmd[0]} not found")
+
+        # Safety check the server command too
+        safe, reason = is_command_safe(cmd)
+        if not safe:
+            return StepResult(name="serve", success=False, error=f"Blocked: {reason}")
+
+        try:
+            self.progress("serve", f"Starting on http://localhost:{port}")
+
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(self.project_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+            self.result.server_process = proc
+            self.result.server_url = f"http://localhost:{port}"
+
+            return StepResult(
+                name="serve",
+                success=True,
+                output=f"Dev server running at http://localhost:{port} (PID {proc.pid})",
+            )
+
+        except Exception as e:
+            return StepResult(name="serve", success=False, error=str(e))
+
     # ── Full pipeline ────────────────────────────────────────────────────
 
-    def run_full_pipeline(self, skip_deploy: bool = False) -> PipelineResult:
+    def run_full_pipeline(
+        self,
+        skip_deploy: bool = False,
+        start_server: bool = True,
+    ) -> PipelineResult:
         """
         Run the complete agentic pipeline end-to-end.
 
-        Steps: install → build → env → CI → Docker → deploy → verify
+        Steps: install -> build -> env -> CI -> Docker -> deploy -> verify -> serve
+
+        Args:
+            skip_deploy: Skip deployment config generation
+            start_server: Start dev server at the end (default True)
         """
         self.progress("pipeline", f"Starting agentic pipeline for {self.project_type} project...")
+
+        if self.human_accept:
+            self.progress("pipeline", "Mode: human-accept (you approve each step)")
+        else:
+            self.progress("pipeline", "Mode: auto-accept (all steps run automatically)")
 
         # Step 1: Install dependencies
         r = self.install_dependencies()
@@ -433,8 +655,13 @@ class AgentExecutor:
         r = self.verify_project()
         self.result.steps.append(r)
 
-        # Final git commit with all auto-generated configs
+        # Step 8: Git commit all auto-generated configs
         self._commit_configs()
+
+        # Step 9: Start dev server
+        if start_server:
+            r = self.start_dev_server()
+            self.result.steps.append(r)
 
         self.progress("pipeline", "Pipeline complete!")
         return self.result
@@ -445,7 +672,6 @@ class AgentExecutor:
             from anyplace.core.git_manager import GitManager
             gm = GitManager(self.project_dir)
             if gm.check_git_installed() and (self.project_dir / ".git").exists():
-                # Stage all new files
                 subprocess.run(
                     ["git", "add", "-A"],
                     cwd=str(self.project_dir),

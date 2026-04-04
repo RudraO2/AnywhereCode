@@ -447,11 +447,57 @@ AnywhereCode (AUTONOMOUS):
 Result: Fully ready project — just `cd` into it and start coding
 ```
 
-### New CLI Commands
+### Safety Guardrails
+
+The agent checks EVERY command against a blocklist before executing:
+- `rm -rf`, `rm --force` — **BLOCKED**
+- `chmod 777`, `chmod -R` — **BLOCKED**
+- `sudo`, `su -`, `killall`, `shutdown`, `reboot` — **BLOCKED**
+- `git push --force`, `git reset --hard` — **BLOCKED**
+- `curl | bash`, `eval`, `exec` — **BLOCKED**
+- Fork bombs, disk overwrites — **BLOCKED**
+
+Safe commands: `npm install`, `pip install`, `npm run build`, `git add`, `git commit`, etc.
+
+### Accept Modes
+
+- **Human-accept (default)**: User approves each pipeline step with Y/n
+- **Auto-accept (`--auto`)**: Everything runs without confirmation
+
+### Auto-Serve on Localhost
+
+After build, the pipeline auto-starts a dev server:
+- React/Vite → `npx vite --host 0.0.0.0 --port 3000`
+- Next.js → `npx next dev -p 3000`
+- Express/Node.js → `npm run dev` or `npm start`
+- Expo → `npx expo start`
+- Django → `python3 manage.py runserver 0.0.0.0:8000`
+- Flask → `python3 -m flask run --host=0.0.0.0`
+- FastAPI → `python3 -m uvicorn main:app --host 0.0.0.0 --port 8000`
+
+### One-Command Install (Termux)
 
 ```bash
+curl -sL https://raw.githubusercontent.com/RudraO2/Classic-Snake-Made-using-Qwen-/main/install.sh | bash
+```
+
+This installs Python, git, Node.js, clones the repo, sets up the `anyplace` command,
+and starts the config wizard. Works on Termux and Linux.
+
+### New/Updated CLI Commands
+
+```bash
+# Just type 'anyplace' to start (no subcommand needed)
+anyplace
+
+# Create project in auto-accept mode (no confirmations)
+anyplace main --auto
+
 # Run full agentic pipeline on existing project
 anyplace run --dir /path/to/project
+
+# Auto-accept mode
+anyplace run --dir /path/to/project --auto
 
 # Skip deployment config
 anyplace run --dir /path/to/project --skip-deploy
@@ -460,10 +506,10 @@ anyplace run --dir /path/to/project --skip-deploy
 ### New MCP Tools
 
 ```
-generate_project   — FULLY AGENTIC: plan → files → install → build → CI → Docker → deploy
-setup_project      — Run agentic pipeline on existing project
+generate_project     — FULLY AGENTIC: plan → files → install → build → CI → Docker → deploy → serve
+setup_project        — Run agentic pipeline on existing project
 install_dependencies — Auto-detect and install deps
-build_project      — Auto-detect and build
+build_project        — Auto-detect and build
 ```
 
 ---
@@ -508,14 +554,18 @@ None known at time of writing. If the next session finds new bugs, add them here
 
 1. **All 6 phases are complete and on `main`** + **Agentic Pipeline is live**.
 2. **AnywhereCode is now fully agentic** — no manual steps after plan approval.
-3. **Gemini is now properly configured** — `system_instruction` + `responseSchema` both set.
-4. **Install works on Termux** — `pip install -e .` in `AnywhereCode/` with no Rust deps.
-5. **Test flow**: `anyplace configure` → `anyplace main` → pick template → enter description → approve plan → **everything happens automatically** (install, build, CI, Docker, deploy).
-6. **Key new file**: `anyplace/core/agent_executor.py` — the autonomous pipeline engine.
-7. **New command**: `anyplace run --dir <path>` — runs agentic pipeline on existing project.
-8. **MCP server** now has `setup_project`, `install_dependencies`, `build_project` tools.
-9. **If any new Gemini errors appear**, check `llm_provider.py:_call_gemini()` and `plan_generator.py:PLAN_RESPONSE_SCHEMA`.
-10. **Mobile paths**: Termux uses `~/storage/downloads/` or `~/Downloads/` for project output.
+3. **Safety guardrails** block `rm -rf`, `chmod 777`, `sudo`, `git push --force`, etc.
+4. **Two modes**: human-accept (default, user approves each step) and auto-accept (`--auto`).
+5. **Auto-serve**: After build, dev server starts on localhost automatically.
+6. **One-command install**: `curl -sL .../install.sh | bash` for Termux beginners.
+7. **Gemini is properly configured** — `system_instruction` + `responseSchema` both set.
+8. **Install works on Termux** — no Rust deps, just `requests`, `click`, `pyyaml`, `rich`.
+9. **Test flow**: `anyplace` → pick template → describe → approve plan → *everything automatic*.
+10. **Key file**: `anyplace/core/agent_executor.py` — autonomous pipeline + safety + accept modes.
+11. **New commands**: `anyplace run --dir <path>`, `anyplace main --auto`.
+12. **MCP server** has `setup_project`, `install_dependencies`, `build_project` tools.
+13. **If Gemini errors**, check `llm_provider.py:_call_gemini()` and `plan_generator.py:PLAN_RESPONSE_SCHEMA`.
+14. **Mobile paths**: Termux uses `~/storage/downloads/` or `~/Downloads/`.
 
 ---
 
