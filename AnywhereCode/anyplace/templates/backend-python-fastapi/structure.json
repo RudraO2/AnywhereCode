@@ -1,0 +1,35 @@
+{
+  "name": "backend-python-fastapi",
+  "type": "backend",
+  "description": "Modern Python REST API with FastAPI, SQLAlchemy & Alembic",
+  "tech_stack": ["Python", "FastAPI", "SQLAlchemy", "Alembic", "Pydantic"],
+  "files_to_generate": [
+    "requirements.txt",
+    "main.py",
+    "app/__init__.py",
+    "app/config.py",
+    "app/database.py",
+    "app/models/__init__.py",
+    "app/models/user.py",
+    "app/schemas/__init__.py",
+    "app/schemas/user.py",
+    "app/routers/__init__.py",
+    "app/routers/users.py",
+    "app/routers/health.py",
+    "app/dependencies.py",
+    "alembic.ini",
+    "alembic/env.py",
+    ".env.example",
+    ".gitignore",
+    "Dockerfile"
+  ],
+  "key_features": [
+    "Auto-generated Swagger UI at /docs",
+    "Pydantic v2 request & response validation",
+    "SQLAlchemy 2.0 async ORM",
+    "Alembic database migrations",
+    "JWT authentication ready",
+    "Dockerized for easy deployment"
+  ],
+  "estimated_time": "20 minutes"
+}

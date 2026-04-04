@@ -23,6 +23,11 @@ from anyplace.cli.progress import GenerationProgress
 from anyplace.core.commit_generator import CommitGenerator
 from anyplace.core.build_runner import BuildRunner
 from anyplace.core.deploy_generator import DeployGenerator
+from anyplace.core.ci_generator import CIGenerator
+from anyplace.core.docker_generator import DockerGenerator
+from anyplace.core.env_manager import EnvManager
+from anyplace.core.guide_generator import GuideGenerator
+from anyplace.core.doc_generator import DocGenerator
 
 console = Console()
 
@@ -483,6 +488,253 @@ def deploy(target, project_dir):
         exit_with_error(e, "Generating deploy config")
     except (APIError, ConfigError) as e:
         exit_with_error(e, "Checking configuration")
+
+
+@cli.command()
+@click.option(
+    "--platform",
+    type=click.Choice(["github", "gitlab", "bitbucket", "circle"]),
+    default="github",
+    show_default=True,
+    help="CI/CD platform to generate config for",
+)
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+def ci(platform, project_dir):
+    """Generate CI/CD pipeline configuration."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+    generator = CIGenerator(path)
+
+    console.print(f"[bold cyan]⚙️  Generating {platform} CI/CD config...[/bold cyan]")
+    console.print(f"   Detected project type: [bold]{generator.project_type}[/bold]")
+
+    try:
+        files = generator.generate(platform)
+        console.print(f"\n[bold green]✅ CI/CD config generated![/bold green]")
+        for rel_path in files:
+            console.print(f"  📄 {rel_path}")
+    except GenerationError as e:
+        exit_with_error(e, "Generating CI/CD config")
+
+
+@cli.command()
+@click.option(
+    "--type", "docker_type",
+    type=click.Choice(["dockerfile", "compose", "all"]),
+    default="all",
+    show_default=True,
+    help="Which Docker files to generate",
+)
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+def docker(docker_type, project_dir):
+    """Generate Docker and docker-compose configuration."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+    generator = DockerGenerator(path)
+
+    console.print(f"[bold cyan]🐳 Generating Docker config ({docker_type})...[/bold cyan]")
+    console.print(f"   Detected project type: [bold]{generator.project_type}[/bold]")
+
+    try:
+        files = generator.generate(docker_type)
+        console.print(f"\n[bold green]✅ Docker config generated![/bold green]")
+        for rel_path in files:
+            console.print(f"  📄 {rel_path}")
+
+        console.print("\n[bold]Next steps:[/bold]")
+        console.print("  1. Review the generated Dockerfile and docker-compose.yml")
+        console.print("  2. docker compose up --build")
+    except GenerationError as e:
+        exit_with_error(e, "Generating Docker config")
+
+
+@cli.command()
+@click.option("--validate", is_flag=True, default=False,
+              help="Validate .env against .env.example")
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+def env(validate, project_dir):
+    """Generate .env.example or validate your .env file."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+    manager = EnvManager()
+
+    if validate:
+        console.print("[bold cyan]🔍 Validating .env against .env.example...[/bold cyan]")
+        try:
+            result = manager.validate_env(path)
+
+            if result["missing"]:
+                console.print(f"\n[bold red]❌ Missing variables ({len(result['missing'])}):[/bold red]")
+                for var in result["missing"]:
+                    console.print(f"  • {var}")
+            else:
+                console.print("\n[bold green]✅ No missing variables![/bold green]")
+
+            if result["ok"]:
+                console.print(f"\n[green]✅ Present ({len(result['ok'])}):[/green]")
+                for var in result["ok"]:
+                    console.print(f"  • {var}")
+
+            if result["extra"]:
+                console.print(f"\n[yellow]⚠️  Extra (not in .env.example) ({len(result['extra'])}):[/yellow]")
+                for var in result["extra"]:
+                    console.print(f"  • {var}")
+
+        except GenerationError as e:
+            exit_with_error(e, "Validating environment")
+    else:
+        runner = BuildRunner(path)
+        project_type = runner._detect_project_type()
+
+        console.print(f"[bold cyan]📋 Generating .env.example...[/bold cyan]")
+        console.print(f"   Detected project type: [bold]{project_type}[/bold]")
+
+        project_name = path.name
+        env_path = manager.write_env_example(path, project_type, project_name)
+
+        console.print(f"\n[bold green]✅ Created: {env_path}[/bold green]")
+        console.print("\n[bold]Next steps:[/bold]")
+        console.print("  1. cp .env.example .env")
+        console.print("  2. Edit .env and fill in your values")
+        console.print("  3. Run [bold]anyplace env --validate[/bold] to check for missing vars")
+
+
+@cli.command()
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+def guide(project_dir):
+    """Show the learning guide for the project."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+    runner = BuildRunner(path)
+    project_type = runner._detect_project_type()
+
+    # Try to detect template from project type
+    template_map = {
+        "react-vite": "web-react-vite",
+        "expo-rn": "mobile-expo-rn",
+        "nodejs": "backend-nodejs",
+    }
+    template_name = template_map.get(project_type, "web-react-vite")
+
+    # Check if LEARNING.md exists, show it; otherwise generate on the fly
+    learning_path = path / "LEARNING.md"
+    if learning_path.exists():
+        console.print(learning_path.read_text())
+        return
+
+    generator = GuideGenerator()
+    project_name = path.name
+
+    console.print(f"[bold cyan]📚 Generating learning guide for {project_name}...[/bold cyan]")
+    content = generator.generate_learning_md(template_name, project_name)
+    console.print(content)
+
+    if click.confirm("\nSave LEARNING.md to project?"):
+        learning_path.write_text(content)
+        console.print(f"[bold green]✅ Saved: {learning_path}[/bold green]")
+
+
+@cli.command()
+@click.option(
+    "--type", "doc_type",
+    type=click.Choice(["contributing", "changelog", "api", "all"]),
+    default="all",
+    show_default=True,
+    help="Which documentation to generate",
+)
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+def docs(doc_type, project_dir):
+    """Generate project documentation (CONTRIBUTING.md, CHANGELOG.md, API docs)."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+    project_name = path.name
+
+    console.print(f"[bold cyan]📝 Generating documentation ({doc_type})...[/bold cyan]")
+
+    try:
+        # Try to use LLM for API docs if configured
+        llm = None
+        try:
+            api_mgr = APIManager()
+            if api_mgr.list_providers():
+                llm = LLMProvider(api_mgr)
+        except Exception:
+            pass
+
+        generator = DocGenerator(path, llm)
+        written = generator.generate_all(project_name, doc_type)
+
+        console.print(f"\n[bold green]✅ Documentation generated![/bold green]")
+        for name, file_path in written.items():
+            console.print(f"  📄 {file_path.name}")
+
+    except Exception as e:
+        exit_with_error(e, "Generating documentation")
+
+
+@cli.command()
+@click.argument("file", required=False)
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+def explain(file, project_dir):
+    """Explain what a file does using AI."""
+    from pathlib import Path
+
+    path = Path(project_dir).resolve()
+
+    if not file:
+        console.print("[yellow]Usage:[/yellow] anyplace explain <filename>")
+        console.print("\nExample: anyplace explain src/App.tsx")
+        return
+
+    file_path = path / file
+    if not file_path.exists():
+        file_path = Path(file)  # Try as absolute path
+
+    if not file_path.exists():
+        console.print(f"[bold red]File not found:[/bold red] {file}")
+        return
+
+    content = file_path.read_text(errors="ignore")
+    if len(content) > 4000:
+        content = content[:4000] + "\n... (truncated)"
+
+    try:
+        api_mgr = APIManager()
+        llm = LLMProvider(api_mgr)
+
+        console.print(f"[bold cyan]🔍 Explaining {file}...[/bold cyan]\n")
+
+        system = (
+            "You are a senior developer giving a code review. "
+            "Explain the file clearly: what it does, why it exists, "
+            "key functions/exports, and anything a new developer should know. "
+            "Be concise but thorough. Use plain language."
+        )
+        prompt = f"Explain this file (`{file}`):\n\n```\n{content}\n```"
+
+        explanation = llm.generate_text(
+            prompt=prompt,
+            system=system,
+            temperature=0.3,
+            max_tokens=1024,
+        )
+
+        from rich.panel import Panel
+        console.print(Panel(explanation, title=f"📄 {file}", border_style="cyan"))
+
+    except (ConfigError, APIError) as e:
+        exit_with_error(e, "Explaining file")
 
 
 @cli.command()

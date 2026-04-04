@@ -13,6 +13,9 @@ from anyplace.core.git_manager import GitManager
 from anyplace.core.llm_provider import LLMProvider
 from anyplace.cli.error_handler import GenerationError, APIError
 from anyplace.core.hooks_injector import HooksInjector
+from anyplace.core.guide_generator import GuideGenerator
+from anyplace.core.env_manager import EnvManager
+from anyplace.core.doc_generator import DocGenerator
 
 
 class BuildOrchestrator:
@@ -103,12 +106,56 @@ class BuildOrchestrator:
                 )
 
             if success:
+                project_dir = self.code_generator.project_dir
+
                 # Inject Claude Code integration (.claude/settings.json + commands)
                 try:
-                    injector = HooksInjector(self.code_generator.project_dir)
+                    injector = HooksInjector(project_dir)
                     injector.inject()
                 except Exception:
-                    pass  # Non-critical - don't fail the build over hook injection
+                    pass
+
+                # Generate learning guides (QUICKSTART.md + LEARNING.md)
+                try:
+                    guide_gen = GuideGenerator()
+                    guide_gen.write_all(
+                        template_name=self.plan.template,
+                        project_name=self.plan.project_name,
+                        tech_stack=self.plan.tech_stack,
+                        next_steps=self.plan.next_steps,
+                        project_dir=project_dir,
+                    )
+                except Exception:
+                    pass
+
+                # Generate .env.example if not already created by the plan
+                try:
+                    env_example = project_dir / ".env.example"
+                    if not env_example.exists():
+                        from anyplace.core.build_runner import BuildRunner
+                        runner = BuildRunner(project_dir)
+                        env_mgr = EnvManager()
+                        env_mgr.write_env_example(
+                            project_dir,
+                            runner._detect_project_type(),
+                            self.plan.project_name,
+                        )
+                except Exception:
+                    pass
+
+                # Generate CONTRIBUTING.md and CHANGELOG.md
+                try:
+                    doc_gen = DocGenerator(project_dir)
+                    doc_gen.generate_all(
+                        project_name=self.plan.project_name,
+                        doc_type="contributing",
+                    )
+                    doc_gen.generate_all(
+                        project_name=self.plan.project_name,
+                        doc_type="changelog",
+                    )
+                except Exception:
+                    pass
 
             return success
 
