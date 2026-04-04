@@ -118,7 +118,12 @@ Your job is to:
 4. Explain architectural decisions
 5. Provide actionable next steps
 
-Always return valid JSON with complete information."""
+CRITICAL: You MUST respond with ONLY valid JSON.
+- No markdown code fences
+- No explanatory text before or after
+- No comments
+- Just the pure JSON object
+- Ensure all JSON is properly formatted and valid"""
 
     def _build_template_context(
         self,

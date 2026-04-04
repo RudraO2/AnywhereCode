@@ -34,6 +34,10 @@ class MockLLMProvider:
         elif "github actions" in prompt.lower() or "workflow" in prompt.lower():
             return self._mock_github_workflow()
 
+        # If json_mode and plan requested, return plan JSON as string
+        elif json_mode and "plan" in prompt.lower():
+            return json.dumps(self._mock_plan_json())
+
         # Return appropriate content based on file type
         elif "package.json" in prompt:
             return self._mock_package_json()

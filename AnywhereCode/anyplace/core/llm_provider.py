@@ -287,7 +287,7 @@ class LLMProvider:
         max_tokens: int = 4096,
     ) -> Dict[str, Any]:
         """
-        Generate and parse a JSON response.
+        Generate and parse a JSON response with robust extraction.
 
         Returns:
             Parsed dict
@@ -303,16 +303,138 @@ class LLMProvider:
             json_mode=True,
         )
 
-        # Strip markdown fences if the model added them anyway
-        if "```json" in response:
-            response = response.split("```json")[1].split("```")[0].strip()
-        elif "```" in response:
-            response = response.split("```")[1].split("```")[0].strip()
+        # Try multiple extraction strategies
+        json_obj = self._extract_json_from_response(response)
+        if json_obj is not None:
+            return json_obj
+
+        # If all extraction attempts fail, try requesting JSON again with stricter prompt
+        strict_prompt = (
+            f"You MUST respond with ONLY valid JSON. No text before or after. No markdown.\n\n"
+            f"Original request:\n{prompt}"
+        )
+        strict_system = (
+            (system or "") +
+            "\n\nIMPORTANT: You MUST respond with ONLY valid JSON. No markdown fences, no explanations."
+        ).strip()
 
         try:
+            response = self.generate_text(
+                prompt=strict_prompt,
+                system=strict_system,
+                temperature=0.1,  # Lower temperature for more deterministic output
+                max_tokens=max_tokens,
+                json_mode=True,
+            )
+            json_obj = self._extract_json_from_response(response)
+            if json_obj is not None:
+                return json_obj
+        except Exception:
+            pass  # Fall through to final error
+
+        raise APIError(
+            f"Failed to parse JSON from LLM response. "
+            f"Response was: {response[:200]}..."
+        )
+
+    def _extract_json_from_response(self, response: str) -> Optional[Dict[str, Any]]:
+        """
+        Extract JSON from various response formats.
+
+        Handles:
+        - Plain JSON
+        - JSON in markdown code blocks
+        - JSON with surrounding text
+        - Partial JSON
+
+        Returns:
+            Parsed dict if found, None otherwise
+        """
+        # Strategy 1: Try parsing as-is
+        try:
             return json.loads(response)
-        except json.JSONDecodeError as e:
-            raise APIError(f"Failed to parse JSON from LLM response: {e}")
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: Strip markdown fences
+        if "```json" in response:
+            try:
+                json_str = response.split("```json")[1].split("```")[0].strip()
+                return json.loads(json_str)
+            except (json.JSONDecodeError, IndexError):
+                pass
+
+        if "```" in response:
+            try:
+                json_str = response.split("```")[1].split("```")[0].strip()
+                return json.loads(json_str)
+            except (json.JSONDecodeError, IndexError):
+                pass
+
+        # Strategy 3: Find JSON by looking for opening/closing braces
+        response_stripped = response.strip()
+        if response_stripped.startswith("{") or response_stripped.startswith("["):
+            # Find the closing brace/bracket
+            try:
+                if response_stripped.startswith("{"):
+                    # Find matching closing brace
+                    depth = 0
+                    for i, char in enumerate(response_stripped):
+                        if char == "{":
+                            depth += 1
+                        elif char == "}":
+                            depth -= 1
+                            if depth == 0:
+                                json_str = response_stripped[:i+1]
+                                return json.loads(json_str)
+                elif response_stripped.startswith("["):
+                    # Find matching closing bracket
+                    depth = 0
+                    for i, char in enumerate(response_stripped):
+                        if char == "[":
+                            depth += 1
+                        elif char == "]":
+                            depth -= 1
+                            if depth == 0:
+                                json_str = response_stripped[:i+1]
+                                return json.loads(json_str)
+            except (json.JSONDecodeError, IndexError):
+                pass
+
+        # Strategy 4: Look for JSON object/array anywhere in the response
+        for start_idx in range(len(response)):
+            if response[start_idx] in ("{", "["):
+                try:
+                    # Try to parse from this position onward
+                    json_str = response[start_idx:]
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    # Try with truncation (find closing brace/bracket)
+                    try:
+                        if response[start_idx] == "{":
+                            depth = 0
+                            for i in range(start_idx, len(response)):
+                                if response[i] == "{":
+                                    depth += 1
+                                elif response[i] == "}":
+                                    depth -= 1
+                                    if depth == 0:
+                                        json_str = response[start_idx:i+1]
+                                        return json.loads(json_str)
+                        elif response[start_idx] == "[":
+                            depth = 0
+                            for i in range(start_idx, len(response)):
+                                if response[i] == "[":
+                                    depth += 1
+                                elif response[i] == "]":
+                                    depth -= 1
+                                    if depth == 0:
+                                        json_str = response[start_idx:i+1]
+                                        return json.loads(json_str)
+                    except (json.JSONDecodeError, IndexError):
+                        continue
+
+        return None
 
     def list_models(self) -> List[str]:
         """Return known model IDs for the active provider."""
