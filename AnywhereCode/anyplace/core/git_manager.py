@@ -36,13 +36,18 @@ class GitManager:
         """
         try:
             self._run_git("init")
-            self._run_git("config", "user.email", "anyplace@example.com")
-            self._run_git("config", "user.name", "AnywhereCode")
-            self.repo_initialized = True
-            return True
-
+            self.repo_initialized = True  # Mark initialized before config (config is optional)
         except GenerationError as e:
             raise GenerationError(f"Failed to initialize git: {e}")
+
+        # Set local identity — non-fatal on Termux where git config can fail right after init
+        try:
+            self._run_git("config", "--local", "user.email", "anyplace@example.com")
+            self._run_git("config", "--local", "user.name", "AnywhereCode")
+        except GenerationError:
+            pass  # Git works fine without explicit local config if global config exists
+
+        return True
 
     def add_and_commit(
         self,

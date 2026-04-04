@@ -387,6 +387,55 @@ An AI project generator for mobile developers using Termux/Android
 
 ---
 
+---
+
+## 🐛 Bugs Fixed (April 2026 — Latest Session)
+
+All changes are on `main` branch. Full history in git log.
+
+### 1. Termux install failure — `litellm` removed ✅
+`litellm` pulled in `fastuuid` → `maturin` (Rust build required), which fails on `aarch64-unknown-linux-android`.  
+**Fix**: Replaced `litellm` with direct `requests` HTTP calls in `llm_provider.py`. Deps now: `requests`, `click`, `pyyaml`, `rich`.
+
+### 2. Gemini returns bullet points instead of JSON ✅
+Two root causes:
+- `systemInstruction` (camelCase) was silently ignored by the REST API — correct key is `system_instruction` (snake_case)
+- Without `responseSchema`, Gemini treats JSON as optional ("preferred but optional")
+
+**Fix** (`llm_provider.py` + `plan_generator.py`):
+- Renamed `systemInstruction` → `system_instruction`
+- Added `response_schema` parameter through the full call chain: `generate_json` → `generate_text` → `_dispatch` → `_call_gemini`
+- Defined `PLAN_RESPONSE_SCHEMA` in `plan_generator.py` with UPPERCASE OpenAPI types (`"STRING"`, `"ARRAY"`, `"OBJECT"`)
+- Passed schema to `generate_json` so Gemini is forced to output exact plan JSON structure
+
+### 3. `'list' object has no attribute 'get'` ✅
+Gemini occasionally wraps JSON in `[{...}]` array. `_parse_plan_response` called `.get()` on a list.  
+**Fix**: `_as_dict()` helper coerces single-element list → dict. `_extract_json_from_response` only walks `{` not `[`.
+
+### 4. `git config` fails after `git init` on Termux ✅
+Error: `Failed to initialize git: fatal: not in a git directory`  
+`git config user.email` ran after `git init` but Termux git couldn't find the local config immediately.  
+**Fix** (`git_manager.py`): Set `self.repo_initialized = True` right after `git init` succeeds. Moved `git config` calls into a separate try/except (non-fatal). Used `--local` flag explicitly.
+
+---
+
+## 🚧 Known Remaining Issues
+
+None known at time of writing. If the next session finds new bugs, add them here.
+
+---
+
+## 📋 What the Next Model Should Know
+
+1. **All 6 phases are complete and on `main`**.
+2. **Gemini is now properly configured** — `system_instruction` + `responseSchema` both set.
+3. **Install works on Termux** — `pip install -e .` in `AnywhereCode/` with no Rust deps.
+4. **Test flow**: `anyplace configure` → `anyplace main` → pick template → enter description → approve plan → files generate → git commits.
+5. **If any new Gemini errors appear**, check `llm_provider.py:_call_gemini()` and `plan_generator.py:PLAN_RESPONSE_SCHEMA`.
+6. **Mobile paths**: Termux uses `~/storage/downloads/` or `~/Downloads/` for project output.
+
+---
+
 **Last Updated**: April 2026  
 **Session ID**: Latest development session  
-**Branch**: `claude/clear-repo-fresh-start-GnCWi`
+**Branch**: `main`
