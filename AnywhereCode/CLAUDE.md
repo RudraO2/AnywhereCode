@@ -1,8 +1,8 @@
 # AnywhereCode - Project Context
 
 **Repository**: `rudrao2/classic-snake-made-using-qwen-`  
-**Branch**: `claude/clear-repo-fresh-start-GnCWi`  
-**Status**: MVP 100% Complete ✅ (All 6 Phases Done)
+**Branch**: `main`  
+**Status**: MVP 100% Complete ✅ + Agentic Pipeline ✅
 
 ---
 
@@ -389,6 +389,85 @@ An AI project generator for mobile developers using Termux/Android
 
 ---
 
+## ⚡ Agentic Pipeline (April 2026 — Latest Update)
+
+**AnywhereCode is now a fully agentic CLI — like Claude Code.**
+
+Previously, after generating files it would print "Next steps" telling the user
+to manually run `npm install`, `npm run build`, etc. **No more.** The CLI now
+does everything autonomously end-to-end.
+
+### What Changed
+
+**New file: `anyplace/core/agent_executor.py`**
+- Central autonomous execution engine
+- Detects project type (Node.js, Python, Rust, Go, Django, Next.js, Expo)
+- Runs full pipeline: install → build → env → CI → Docker → deploy → verify
+- Each step is resilient — failures don't block the pipeline
+- All configs auto-committed to git
+
+**Updated: `anyplace/core/build_orchestrator.py`**
+- New `agentic=True` flag (default)
+- After code generation, automatically runs the full AgentExecutor pipeline
+- New `agent_callback` for live progress feedback
+
+**Updated: `anyplace/core/build_runner.py`**
+- Now detects Python, Django, Rust, Go, Next.js, Express/Fastify projects
+- New `auto_install()` and `auto_build()` methods (safe, no-raise)
+- `get_install_command()` returns correct command for each project type
+
+**Updated: `anyplace/cli/main.py`**
+- `anyplace main` now shows agentic pipeline results table instead of manual steps
+- New `anyplace run` command — runs the agentic pipeline on any existing project
+- Beautiful Rich table output showing each pipeline step status
+
+**Updated: `anyplace/mcp/server.py`**
+- `generate_project` is now fully agentic (install + build + CI + Docker + deploy)
+- New `setup_project` tool — run agentic pipeline on existing project
+- New `install_dependencies` tool — auto-detect and install deps
+- New `build_project` tool — auto-detect and build
+
+### How It Works Now
+
+```
+User: "anyplace main" → select template → describe project → approve plan
+  ↓
+AnywhereCode (AUTONOMOUS):
+  1. Generate all source files
+  2. Git init + commit each file
+  3. npm install / pip install (auto-detected)
+  4. npm run build / python -m build (auto-detected)
+  5. Create .env from .env.example
+  6. Generate GitHub Actions CI/CD
+  7. Generate Dockerfile + docker-compose.yml
+  8. Generate deployment config
+  9. Verify project works
+  10. Git commit all configs
+  ↓
+Result: Fully ready project — just `cd` into it and start coding
+```
+
+### New CLI Commands
+
+```bash
+# Run full agentic pipeline on existing project
+anyplace run --dir /path/to/project
+
+# Skip deployment config
+anyplace run --dir /path/to/project --skip-deploy
+```
+
+### New MCP Tools
+
+```
+generate_project   — FULLY AGENTIC: plan → files → install → build → CI → Docker → deploy
+setup_project      — Run agentic pipeline on existing project
+install_dependencies — Auto-detect and install deps
+build_project      — Auto-detect and build
+```
+
+---
+
 ## 🐛 Bugs Fixed (April 2026 — Latest Session)
 
 All changes are on `main` branch. Full history in git log.
@@ -427,12 +506,16 @@ None known at time of writing. If the next session finds new bugs, add them here
 
 ## 📋 What the Next Model Should Know
 
-1. **All 6 phases are complete and on `main`**.
-2. **Gemini is now properly configured** — `system_instruction` + `responseSchema` both set.
-3. **Install works on Termux** — `pip install -e .` in `AnywhereCode/` with no Rust deps.
-4. **Test flow**: `anyplace configure` → `anyplace main` → pick template → enter description → approve plan → files generate → git commits.
-5. **If any new Gemini errors appear**, check `llm_provider.py:_call_gemini()` and `plan_generator.py:PLAN_RESPONSE_SCHEMA`.
-6. **Mobile paths**: Termux uses `~/storage/downloads/` or `~/Downloads/` for project output.
+1. **All 6 phases are complete and on `main`** + **Agentic Pipeline is live**.
+2. **AnywhereCode is now fully agentic** — no manual steps after plan approval.
+3. **Gemini is now properly configured** — `system_instruction` + `responseSchema` both set.
+4. **Install works on Termux** — `pip install -e .` in `AnywhereCode/` with no Rust deps.
+5. **Test flow**: `anyplace configure` → `anyplace main` → pick template → enter description → approve plan → **everything happens automatically** (install, build, CI, Docker, deploy).
+6. **Key new file**: `anyplace/core/agent_executor.py` — the autonomous pipeline engine.
+7. **New command**: `anyplace run --dir <path>` — runs agentic pipeline on existing project.
+8. **MCP server** now has `setup_project`, `install_dependencies`, `build_project` tools.
+9. **If any new Gemini errors appear**, check `llm_provider.py:_call_gemini()` and `plan_generator.py:PLAN_RESPONSE_SCHEMA`.
+10. **Mobile paths**: Termux uses `~/storage/downloads/` or `~/Downloads/` for project output.
 
 ---
 

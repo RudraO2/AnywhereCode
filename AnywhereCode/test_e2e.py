@@ -86,6 +86,7 @@ def test_code_generation(plan_data: dict) -> bool:
                 llm_provider=mock_llm,
                 project_dir=Path(tmpdir) / "test-project",
                 use_git=True,
+                agentic=False,
             )
 
             # Show progress
@@ -315,8 +316,8 @@ def test_build_runner_detection():
             )
             runner3 = BuildRunner(node_dir)
             detected3 = runner3._detect_project_type()
-            assert detected3 == "nodejs", f"Expected 'nodejs', got '{detected3}'"
-            print(f"✅ Node.js project detected: {detected3}")
+            assert detected3 == "nodejs-backend", f"Expected 'nodejs-backend', got '{detected3}'"
+            print(f"✅ Node.js backend project detected: {detected3}")
 
             return True
 
@@ -446,6 +447,7 @@ def test_build_orchestrator_injects_hooks():
                 llm_provider=mock_llm,
                 project_dir=Path(tmpdir) / "hooks-test",
                 use_git=False,
+                agentic=False,
             )
 
             success = orchestrator.build()

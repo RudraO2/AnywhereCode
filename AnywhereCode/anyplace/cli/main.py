@@ -32,6 +32,58 @@ from anyplace.core.doc_generator import DocGenerator
 console = Console()
 
 
+def _show_pipeline_results(result):
+    """Display the agentic pipeline results in a nice table."""
+    from rich.table import Table
+
+    console.print("\n[bold cyan]⚡ Agentic Pipeline Results[/bold cyan]\n")
+
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Step", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail", style="dim")
+
+    for step in result.summary["steps"]:
+        name = step["name"]
+        status = step["status"]
+        detail = step["detail"]
+
+        if status == "pass":
+            status_str = "[bold green]✅ Done[/bold green]"
+        elif status == "skipped":
+            status_str = "[yellow]⏭ Skipped[/yellow]"
+        else:
+            status_str = "[bold red]❌ Failed[/bold red]"
+
+        table.add_row(name, status_str, detail[:80] if detail else "")
+
+    console.print(table)
+
+    passed = result.summary["passed"]
+    total = result.summary["total_steps"]
+    skipped = result.summary["skipped"]
+    failed = result.summary["failed"]
+
+    if failed == 0:
+        console.print(f"\n[bold green]🎉 All done! {passed} passed, {skipped} skipped.[/bold green]")
+        console.print(f"[bold]Your project is ready at:[/bold] {result.project_dir}")
+        console.print("\n[bold cyan]What was done automatically:[/bold cyan]")
+        console.print("  • Dependencies installed")
+        console.print("  • Project built")
+        console.print("  • Environment configured (.env)")
+        console.print("  • CI/CD pipeline generated (GitHub Actions)")
+        console.print("  • Docker config generated")
+        console.print("  • Deployment config generated")
+        console.print("  • Everything committed to git")
+        console.print("\n[bold]To start developing:[/bold]")
+        console.print(f"  cd {result.project_dir}")
+        console.print("  # Your project is already set up — just start coding!")
+    else:
+        console.print(f"\n[yellow]⚠️ {passed} passed, {skipped} skipped, {failed} failed[/yellow]")
+        console.print("[dim]Some steps failed but your project files are generated.[/dim]")
+        console.print(f"\nProject at: {result.project_dir}")
+
+
 # ASCII Art
 BANNER = """
     _   _ ___   _   _ ___ _______ ____  _____  ______
@@ -242,29 +294,40 @@ def main():
 
                 # Show plan for approval
                 if show_plan_approval_screen(plan):
-                    # Build project
+                    # Build project — fully agentic
                     try:
+                        def agent_progress(step: str, msg: str):
+                            """Live feedback from the agentic pipeline."""
+                            console.print(f"  [cyan]⚡ {step}[/cyan] {msg}")
+
                         orchestrator = BuildOrchestrator(
                             plan=plan,
                             llm_provider=llm,
                             use_git=True,
+                            agentic=True,
                         )
 
                         progress = GenerationProgress(len(plan.files), project_name)
                         progress.show_generation_start()
 
-                        # Generate with progress callback
+                        # Generate + auto-install + auto-build + auto-deploy
                         success = orchestrator.build(
                             progress_callback=progress.show_file_progress,
+                            agent_callback=agent_progress,
                         )
 
                         if success:
                             project_info = orchestrator.get_project_info()
                             progress.show_generation_complete(project_info["project_dir"])
 
-                            console.print("\n[bold]Next steps:[/bold]")
-                            for i, step in enumerate(plan.next_steps, 1):
-                                console.print(f"  {i}. {step}")
+                            # Show agentic pipeline results
+                            if orchestrator.pipeline_result:
+                                _show_pipeline_results(orchestrator.pipeline_result)
+                            else:
+                                # Fallback if agentic mode was off
+                                console.print("\n[bold]Next steps:[/bold]")
+                                for i, step in enumerate(plan.next_steps, 1):
+                                    console.print(f"  {i}. {step}")
 
                     except (GenerationError, APIError) as e:
                         progress.show_generation_error(str(e))
@@ -827,6 +890,35 @@ def explain(file, project_dir):
 
     except (ConfigError, APIError) as e:
         exit_with_error(e, "Explaining file")
+
+
+@cli.command()
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+@click.option("--skip-deploy", is_flag=True, default=False,
+              help="Skip deployment config generation")
+def run(project_dir, skip_deploy):
+    """Run the full agentic pipeline on an existing project (install, build, CI, Docker, deploy)."""
+    from pathlib import Path
+    from anyplace.core.agent_executor import AgentExecutor
+
+    path = Path(project_dir).resolve()
+
+    console.print(BANNER, style="cyan bold")
+    console.print(f"[bold cyan]⚡ Running agentic pipeline on:[/bold cyan] {path}\n")
+
+    def agent_progress(step: str, msg: str):
+        console.print(f"  [cyan]⚡ {step}[/cyan] {msg}")
+
+    executor = AgentExecutor(
+        project_dir=path,
+        progress_callback=agent_progress,
+    )
+
+    console.print(f"[bold]Detected project type:[/bold] {executor.project_type}\n")
+
+    result = executor.run_full_pipeline(skip_deploy=skip_deploy)
+    _show_pipeline_results(result)
 
 
 @cli.command()

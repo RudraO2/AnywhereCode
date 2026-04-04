@@ -1,8 +1,11 @@
 """
 MCP server for AnywhereCode.
 
-Exposes list_templates, generate_plan, and generate_project as MCP tools
-so Claude can call them directly without the CLI.
+Exposes fully agentic tools: generate a complete project end-to-end,
+install dependencies, build, deploy — all without manual steps.
+
+Claude or any MCP client can call these tools to autonomously create
+and set up projects.
 
 Usage:
     anyplace serve
@@ -82,7 +85,21 @@ def generate_project(
     output_dir: Optional[str] = None,
 ) -> dict:
     """
-    Generate a complete project: plan, all files, git repo, and Claude Code integration.
+    FULLY AGENTIC: Generate a complete project end-to-end.
+
+    This does EVERYTHING autonomously:
+    1. Generates an AI project plan
+    2. Creates all source files
+    3. Initializes git repo with commits
+    4. Installs all dependencies (npm install / pip install)
+    5. Builds the project
+    6. Sets up .env from .env.example
+    7. Generates CI/CD pipeline (GitHub Actions)
+    8. Generates Docker config
+    9. Generates deployment config
+    10. Verifies the project works
+
+    No manual steps needed — just call this and get a ready-to-use project.
 
     Args:
         template_name: Template to use
@@ -91,7 +108,7 @@ def generate_project(
         output_dir: Output directory path (defaults to ~/.anyplace/projects/)
 
     Returns:
-        Dict with project_dir, files_generated, total_files, git_enabled
+        Dict with project_dir, files_generated, total_files, git_enabled, pipeline_results
     """
     try:
         from pathlib import Path
@@ -114,22 +131,112 @@ def generate_project(
             llm_provider=llm,
             project_dir=project_dir,
             use_git=True,
+            agentic=True,  # Full autonomous pipeline
         )
 
         success = orchestrator.build()
 
-        if success:
-            # Inject Claude Code integration (already done by orchestrator,
-            # but explicit call here ensures it runs even if orchestrator changes)
-            try:
-                injector = HooksInjector(project_dir)
-                injector.inject()
-            except Exception:
-                pass
+        result = orchestrator.get_project_info()
 
-        return orchestrator.get_project_info()
+        # Include pipeline results
+        if orchestrator.pipeline_result:
+            result["pipeline"] = orchestrator.pipeline_result.summary
+
+        return result
 
     except (GenerationError, APIError) as e:
+        raise ValueError(str(e))
+
+
+@mcp.tool()
+def setup_project(
+    project_dir: str,
+    skip_deploy: bool = False,
+) -> dict:
+    """
+    Run the agentic pipeline on an EXISTING project directory.
+
+    Automatically installs dependencies, builds, sets up CI/CD,
+    Docker, environment, and deployment configs.
+
+    Use this when you have an existing project that needs to be set up.
+
+    Args:
+        project_dir: Path to the project directory
+        skip_deploy: Skip deployment config generation
+
+    Returns:
+        Pipeline results with status of each step
+    """
+    try:
+        from pathlib import Path
+        from anyplace.core.agent_executor import AgentExecutor
+
+        path = Path(project_dir)
+        if not path.exists():
+            raise ValueError(f"Project directory does not exist: {project_dir}")
+
+        executor = AgentExecutor(project_dir=path)
+        result = executor.run_full_pipeline(skip_deploy=skip_deploy)
+        return result.summary
+
+    except Exception as e:
+        raise ValueError(str(e))
+
+
+@mcp.tool()
+def install_dependencies(project_dir: str) -> dict:
+    """
+    Auto-detect and install project dependencies.
+
+    Supports: npm (Node.js), pip (Python), cargo (Rust), go mod (Go).
+
+    Args:
+        project_dir: Path to the project directory
+
+    Returns:
+        Result with success status and output
+    """
+    try:
+        from pathlib import Path
+        from anyplace.core.agent_executor import AgentExecutor
+
+        executor = AgentExecutor(project_dir=Path(project_dir))
+        result = executor.install_dependencies()
+        return {
+            "success": result.success,
+            "skipped": result.skipped,
+            "output": result.output,
+            "error": result.error,
+        }
+    except Exception as e:
+        raise ValueError(str(e))
+
+
+@mcp.tool()
+def build_project(project_dir: str) -> dict:
+    """
+    Auto-detect project type and build.
+
+    Args:
+        project_dir: Path to the project directory
+
+    Returns:
+        Result with success status and output
+    """
+    try:
+        from pathlib import Path
+        from anyplace.core.agent_executor import AgentExecutor
+
+        executor = AgentExecutor(project_dir=Path(project_dir))
+        result = executor.build_project()
+        return {
+            "success": result.success,
+            "skipped": result.skipped,
+            "output": result.output,
+            "error": result.error,
+        }
+    except Exception as e:
         raise ValueError(str(e))
 
 

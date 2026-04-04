@@ -1,7 +1,8 @@
 """
 Build orchestrator.
 
-Coordinates code generation, git management, and project setup.
+Coordinates the full agentic pipeline: code generation → dependency install →
+build → CI/Docker/deploy setup — all autonomous, no manual steps.
 """
 
 from pathlib import Path
@@ -19,7 +20,7 @@ from anyplace.core.doc_generator import DocGenerator
 
 
 class BuildOrchestrator:
-    """Orchestrates the entire build process."""
+    """Orchestrates the entire build process — fully agentic, end-to-end."""
 
     def __init__(
         self,
@@ -27,6 +28,7 @@ class BuildOrchestrator:
         llm_provider: Optional[LLMProvider] = None,
         project_dir: Optional[Path] = None,
         use_git: bool = True,
+        agentic: bool = True,
     ):
         """
         Initialize build orchestrator.
@@ -36,24 +38,32 @@ class BuildOrchestrator:
             llm_provider: LLMProvider instance
             project_dir: Custom project directory
             use_git: Whether to initialize git repository
+            agentic: If True, auto-install deps, build, and setup deployment
         """
         self.plan = plan
         self.llm_provider = llm_provider or LLMProvider()
         self.project_dir = project_dir
         self.use_git = use_git
+        self.agentic = agentic
 
         self.code_generator: Optional[CodeGenerator] = None
         self.git_manager: Optional[GitManager] = None
+        self.pipeline_result = None  # Set after agentic pipeline runs
 
     def build(
         self,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        agent_callback: Optional[Callable[[str, str], None]] = None,
     ) -> bool:
         """
         Execute the full build process.
 
+        When agentic=True, this also installs deps, builds, and sets up
+        CI/Docker/deploy — no manual steps needed.
+
         Args:
-            progress_callback: Called with (current_file, index, total)
+            progress_callback: Called with (current_file, index, total) during code gen
+            agent_callback: Called with (step_name, status) during agentic pipeline
 
         Returns:
             True if successful
@@ -157,6 +167,14 @@ class BuildOrchestrator:
                 except Exception:
                     pass
 
+                # ── AGENTIC PIPELINE ─────────────────────────────────────
+                # This is the key difference: instead of printing "next steps"
+                # for the user to do manually, we DO THEM automatically.
+                if self.agentic:
+                    self.pipeline_result = self._run_agentic_pipeline(
+                        project_dir, agent_callback
+                    )
+
             return success
 
         except (GenerationError, APIError) as e:
@@ -164,6 +182,24 @@ class BuildOrchestrator:
             if self.code_generator:
                 self.code_generator.cleanup_on_failure()
             raise
+
+    def _run_agentic_pipeline(
+        self,
+        project_dir: Path,
+        callback: Optional[Callable[[str, str], None]] = None,
+    ):
+        """
+        Run the full autonomous post-generation pipeline:
+        install deps → build → env → CI → Docker → deploy → verify
+        """
+        from anyplace.core.agent_executor import AgentExecutor
+
+        executor = AgentExecutor(
+            project_dir=project_dir,
+            progress_callback=callback,
+        )
+
+        return executor.run_full_pipeline()
 
     def _create_progress_callback(
         self,
