@@ -62,6 +62,7 @@ def _call_gemini(
     temperature: float,
     max_tokens: int,
     json_mode: bool,
+    response_schema: Optional[Dict] = None,
 ) -> str:
     """Call the Google Generative Language API directly."""
     url = (
@@ -81,21 +82,24 @@ def _call_gemini(
     }
     if json_mode:
         gen_config["responseMimeType"] = "application/json"
+        if response_schema:
+            gen_config["responseSchema"] = response_schema
 
     body: Dict[str, Any] = {
         "contents": contents,
         "generationConfig": gen_config,
     }
 
-    # Use Gemini's dedicated systemInstruction field (cleaner than fake turn injection)
+    # Use Gemini's dedicated system_instruction field (snake_case per REST API docs)
     sys_text = system or ""
-    if json_mode:
+    if json_mode and not response_schema:
+        # Only add text reminder when no schema is enforcing structure
         sys_text = (
             sys_text
             + "\nReturn ONLY a raw JSON object — no markdown fences, no explanation, no extra text."
         ).strip()
     if sys_text:
-        body["systemInstruction"] = {"parts": [{"text": sys_text}]}
+        body["system_instruction"] = {"parts": [{"text": sys_text}]}
 
     resp = requests.post(url, json=body, timeout=120)
     resp.raise_for_status()
@@ -208,6 +212,7 @@ class LLMProvider:
         temperature: float,
         max_tokens: int,
         json_mode: bool,
+        response_schema: Optional[Dict] = None,
     ) -> str:
         """Route to the correct HTTP helper based on provider."""
         if self.provider == "claude":
@@ -220,6 +225,7 @@ class LLMProvider:
             return _call_gemini(
                 self.api_key, self.model, user_messages,
                 system, temperature, max_tokens, json_mode,
+                response_schema=response_schema,
             )
 
         # OpenRouter or custom — both are OpenAI-compatible
@@ -243,6 +249,7 @@ class LLMProvider:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         json_mode: bool = False,
+        response_schema: Optional[Dict] = None,
     ) -> str:
         """
         Generate text using the configured LLM.
@@ -263,7 +270,10 @@ class LLMProvider:
         user_messages = [{"role": "user", "content": prompt}]
 
         try:
-            return self._dispatch(user_messages, system, temperature, max_tokens, json_mode)
+            return self._dispatch(
+                user_messages, system, temperature, max_tokens, json_mode,
+                response_schema=response_schema,
+            )
 
         except requests.exceptions.Timeout:
             raise APIError("Request timed out. Check your internet connection.")
@@ -297,9 +307,14 @@ class LLMProvider:
         system: Optional[str] = None,
         temperature: float = 0.3,
         max_tokens: int = 4096,
+        response_schema: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """
         Generate and parse a JSON response with robust extraction.
+
+        Args:
+            response_schema: Optional Gemini responseSchema (OpenAPI subset, UPPERCASE types).
+                             When provided to Gemini, forces exact JSON structure.
 
         Returns:
             Parsed dict
@@ -313,6 +328,7 @@ class LLMProvider:
             temperature=temperature,
             max_tokens=max_tokens,
             json_mode=True,
+            response_schema=response_schema,
         )
 
         # Try multiple extraction strategies — always yields a dict or None
@@ -337,6 +353,7 @@ class LLMProvider:
                 temperature=0.1,  # Lower temperature for more deterministic output
                 max_tokens=max_tokens,
                 json_mode=True,
+                response_schema=response_schema,
             )
             json_obj = self._extract_json_from_response(response)
             if json_obj is not None:

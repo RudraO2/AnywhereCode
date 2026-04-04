@@ -13,6 +13,38 @@ from anyplace.core.llm_provider import LLMProvider
 from anyplace.cli.templates import get_template_info, get_template_path
 from anyplace.cli.error_handler import GenerationError, APIError
 
+# Gemini responseSchema — forces exact JSON structure (UPPERCASE types per OpenAPI subset)
+PLAN_RESPONSE_SCHEMA: Dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "project_name": {"type": "STRING"},
+        "template": {"type": "STRING"},
+        "description": {"type": "STRING"},
+        "tech_stack": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "files": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "path": {"type": "STRING"},
+                    "description": {"type": "STRING"},
+                    "file_type": {"type": "STRING"},
+                    "dependencies": {"type": "ARRAY", "items": {"type": "STRING"}},
+                },
+                "required": ["path", "description", "file_type", "dependencies"],
+            },
+        },
+        "key_features": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "estimated_time": {"type": "STRING"},
+        "architecture_notes": {"type": "STRING"},
+        "next_steps": {"type": "ARRAY", "items": {"type": "STRING"}},
+    },
+    "required": [
+        "project_name", "template", "description", "tech_stack", "files",
+        "key_features", "estimated_time", "architecture_notes", "next_steps",
+    ],
+}
+
 
 @dataclass
 class FileInfo:
@@ -84,12 +116,13 @@ class PlanGenerator:
             # Build context about the template
             context = self._build_template_context(template_info, project_name, description)
 
-            # Generate plan from LLM
+            # Generate plan from LLM (pass schema to force structured output on Gemini)
             plan_json = self.llm_provider.generate_json(
                 prompt=self._build_plan_prompt(context),
                 system=self._build_system_prompt(),
                 temperature=0.5,
                 max_tokens=2000,
+                response_schema=PLAN_RESPONSE_SCHEMA,
             )
 
             # Parse and validate plan
