@@ -13,7 +13,7 @@ from pathlib import Path
 from anyplace.config.environment import get_platform_info, get_projects_dir
 from anyplace.config.api_manager import APIManager
 from anyplace.cli.error_handler import handle_error, exit_with_error, ConfigError, GenerationError, APIError
-from anyplace.cli.config_wizard import configure_providers
+from anyplace.cli.config_wizard import configure_providers, quick_setup
 from anyplace.cli.templates import list_available_templates, get_template_info
 from anyplace.core.plan_generator import PlanGenerator
 from anyplace.core.llm_provider import LLMProvider
@@ -104,10 +104,15 @@ AI-Powered Project Generation for Mobile & Desktop
 """
 
 
-@click.group()
-def cli():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
     """AnywhereCode - Generate projects anywhere, anytime."""
-    pass
+    # Bare `anyplace` should start the interactive flow, not print help.
+    # The console_scripts entry point calls this group directly, so the
+    # dispatch has to live here rather than under a __main__ guard.
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(main)
 
 
 def _show_existing_project_menu():
@@ -154,6 +159,8 @@ def _show_existing_project_menu():
 
     # Show what you can do
     actions = [
+        ("apk",     "anyplace apk --dir",     "📱 Build an installable Android APK in the cloud"),
+        ("run",     "anyplace run --dir",     "Run the full agentic pipeline"),
         ("commit",  "anyplace commit --dir",  "Generate AI commit message & commit"),
         ("build",   "anyplace build --dir",   "Run the project build"),
         ("deploy",  "anyplace deploy --dir",  "Generate deployment config"),
@@ -234,13 +241,10 @@ def main(auto_accept):
         providers = api_mgr.list_providers()
 
         if not providers:
-            console.print("[bold yellow]⚠️  No LLM provider configured![/bold yellow]")
-            console.print("Let's set up your AI provider...\n")
+            console.print("[bold yellow]👋 First time here — let's get you a model.[/bold yellow]\n")
 
-            if click.confirm("Configure API now?"):
-                configure_providers()
-            else:
-                console.print("[bold red]Can't continue without LLM provider.[/bold red]")
+            if not quick_setup():
+                console.print("[bold red]Can't continue without an LLM provider.[/bold red]")
                 console.print("Run: [bold]anyplace configure[/bold] to set up")
                 return
 
@@ -373,6 +377,10 @@ def main(auto_accept):
                 console.print("[yellow]Cancelled[/yellow]")
                 break
 
+    except (click.Abort, EOFError, KeyboardInterrupt):
+        # Ctrl+C / Ctrl+D is a normal way to leave an interactive menu, not a
+        # crash — an empty red error panel here just looks broken.
+        console.print("\n[yellow]Cancelled. Run [bold]anyplace[/bold] any time to come back.[/yellow]")
     except ConfigError as e:
         exit_with_error(e, "Checking configuration")
     except Exception as e:
@@ -945,11 +953,265 @@ def run(project_dir, skip_deploy, auto_accept):
     _wait_for_server(result)
 
 
+@cli.command("login-expo")
+@click.option("--token", default=None, help="Expo access token (prompted if omitted)")
+def login_expo(token):
+    """Save an Expo access token so `anyplace apk` can build without a browser."""
+    console.print("[bold cyan]🔑 Expo login[/bold cyan]\n")
+    console.print("Create an access token at:")
+    console.print("  [bold]https://expo.dev/settings/access-tokens[/bold]\n")
+    console.print(
+        "[dim]A token is the phone-friendly option — interactive `eas login`\n"
+        "needs a browser round-trip that is awkward inside Termux.[/dim]\n"
+    )
+
+    if not token:
+        token = click.prompt("Paste your Expo access token", hide_input=True, default="")
+
+    if not token.strip():
+        console.print("[yellow]No token entered — nothing saved.[/yellow]")
+        return
+
+    try:
+        api_mgr = APIManager()
+        api_mgr.set_expo_token(token)
+        console.print("\n[bold green]✅ Token saved[/bold green] to ~/.config/anyplace/config.yaml")
+        console.print("Now run: [bold]anyplace apk[/bold]")
+    except Exception as e:
+        exit_with_error(e, "Saving Expo token")
+
+
+@cli.command()
+@click.option("--dir", "project_dir", type=click.Path(exists=True),
+              default=".", show_default=True, help="Project directory")
+@click.option("--profile", default="preview", show_default=True,
+              help="EAS build profile (preview=APK, production=AAB for Play Store)")
+@click.option("--platform", type=click.Choice(["android", "ios"]),
+              default="android", show_default=True, help="Target platform")
+@click.option("--no-wait", is_flag=True, default=False,
+              help="Queue the build and exit instead of waiting for it")
+@click.option("--install", is_flag=True, default=False,
+              help="Download the APK and open Android's installer (Termux only)")
+@click.option("--clear-cache", is_flag=True, default=False,
+              help="Ignore EAS build caches")
+def apk(project_dir, profile, platform, no_wait, install, clear_cache):
+    """
+    Build an installable Android APK in the cloud — no Android Studio, no Gradle.
+
+    Gradle cannot realistically run on a phone, so the build happens on Expo's
+    servers (EAS). Your device only uploads the source and downloads the APK.
+    """
+    from anyplace.core.eas_builder import EASBuilder
+    from anyplace.cli import qr
+
+    path = Path(project_dir).resolve()
+
+    console.print("[bold cyan]📱 Cloud APK build[/bold cyan]")
+    console.print(f"[dim]Project: {path}[/dim]\n")
+
+    try:
+        api_mgr = APIManager()
+        expo_token = api_mgr.get_expo_token()
+    except Exception:
+        expo_token = None
+
+    def progress(step: str, msg: str):
+        console.print(f"  [cyan]⚡ {step}[/cyan] {msg}")
+
+    builder = EASBuilder(path, progress_callback=progress, expo_token=expo_token)
+
+    # Check the prerequisites before promising a 20-minute wait.
+    problems = builder.preflight()
+    if problems:
+        console.print("[bold red]❌ Not ready to build[/bold red]\n")
+        for problem in problems:
+            console.print(f"  • {problem}\n")
+        return
+
+    if not no_wait:
+        console.print(
+            "[dim]Cloud builds usually take 8–20 minutes. Leave this running —\n"
+            "the build continues on Expo's servers even if you disconnect.[/dim]\n"
+        )
+
+    try:
+        result = builder.build_apk(
+            platform=platform,
+            profile=profile,
+            wait=not no_wait,
+            clear_cache=clear_cache,
+        )
+    except (GenerationError, APIError) as e:
+        exit_with_error(e, "Building APK")
+        return
+
+    if result.files_written:
+        console.print("\n[bold]Config prepared:[/bold]")
+        for f in result.files_written:
+            console.print(f"  📄 {f}")
+
+    if not result.success:
+        console.print(f"\n[bold red]❌ Build failed[/bold red]\n")
+        console.print(result.error)
+        if result.logs_url:
+            console.print(f"\nLogs: {result.logs_url}")
+        return
+
+    if no_wait:
+        console.print(f"\n[bold green]✅ Build queued![/bold green]")
+        console.print(f"  Build ID: {result.build_id}")
+        if result.logs_url:
+            console.print(f"  Track it: {result.logs_url}")
+        console.print("\n[dim]Come back later and run:[/dim] [bold]anyplace apk --no-wait[/bold] "
+                      "[dim]to queue another, or check the link above.[/dim]")
+        return
+
+    console.print(f"\n[bold green]🎉 APK ready![/bold green]\n")
+    console.print(f"  Download: [bold]{result.artifact_url}[/bold]")
+    if result.logs_url:
+        console.print(f"  Details:  {result.logs_url}")
+
+    # A QR is the fastest way to move the APK to a *second* device.
+    if result.artifact_url:
+        console.print()
+        drew = qr.print_qr(
+            result.artifact_url,
+            console=console,
+            label="[bold cyan]Scan to install on another phone:[/bold cyan]\n",
+        )
+        if not drew:
+            console.print("[dim]Install `qrcode` for a scannable code: pip install qrcode[/dim]")
+
+    # On the phone that ran the build, skip the QR entirely and just install.
+    if install and result.artifact_url:
+        try:
+            downloads = get_projects_dir()
+            apk_path = builder.download_artifact(result.artifact_url, downloads)
+            console.print(f"\n[bold green]⬇️  Saved:[/bold green] {apk_path}")
+
+            if builder.open_on_device(apk_path):
+                console.print("[bold green]📲 Opening Android installer…[/bold green]")
+            else:
+                console.print("[dim]Open that file in your file manager to install.[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]Could not download automatically: {e}[/yellow]")
+            console.print(f"[dim]Use the URL above instead.[/dim]")
+
+
+@cli.command()
+def doctor():
+    """Check that everything AnywhereCode needs is installed and configured."""
+    import shutil
+    import subprocess
+    from rich.table import Table
+
+    from anyplace.core.llm_provider import omniroute_is_running
+
+    console.print("[bold cyan]🩺 AnywhereCode doctor[/bold cyan]\n")
+
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Check", style="bold")
+    table.add_column("Status")
+    table.add_column("Fix / detail", style="dim")
+
+    problems = 0
+
+    def add(name: str, ok: bool, detail: str = "", optional: bool = False):
+        nonlocal problems
+        if ok:
+            table.add_row(name, "[green]✅[/green]", detail)
+        elif optional:
+            table.add_row(name, "[yellow]○ optional[/yellow]", detail)
+        else:
+            problems += 1
+            table.add_row(name, "[red]❌[/red]", detail)
+
+    def version_of(binary: str, *args) -> str:
+        try:
+            out = subprocess.run(
+                [binary, *args], capture_output=True, text=True, timeout=20
+            )
+            return (out.stdout or out.stderr).strip().splitlines()[0][:40]
+        except (subprocess.SubprocessError, OSError, IndexError):
+            return ""
+
+    # Core tooling
+    import sys
+    py_ok = sys.version_info >= (3, 8)
+    add("Python ≥ 3.8", py_ok, f"found {sys.version.split()[0]}")
+
+    git_ok = shutil.which("git") is not None
+    add("git", git_ok, version_of("git", "--version") or "install: pkg install git")
+
+    node_ok = shutil.which("node") is not None
+    add("Node.js", node_ok,
+        version_of("node", "--version") if node_ok else "needed for JS projects & EAS: pkg install nodejs")
+
+    # Platform
+    platform_info = get_platform_info()
+    if platform_info["is_termux"]:
+        storage_ok = (Path.home() / "storage").exists()
+        add("Termux storage access", storage_ok,
+            "projects save to ~/storage/downloads" if storage_ok
+            else "run: termux-setup-storage")
+    else:
+        add("Projects directory", True, str(get_projects_dir()))
+
+    # LLM provider
+    try:
+        api_mgr = APIManager()
+        providers = api_mgr.list_providers()
+        if providers:
+            active = api_mgr.get_active_provider() or list(providers)[0]
+            model = providers[active].get("model", "?")
+            add("LLM provider", True, f"{active} ({model})")
+        else:
+            add("LLM provider", False, "run: anyplace configure")
+    except Exception as e:
+        add("LLM provider", False, str(e)[:60])
+
+    # Free gateway
+    add("OmniRoute gateway", omniroute_is_running(),
+        "free tokens, no key — start with: npm i -g omniroute && omniroute",
+        optional=True)
+
+    # Mobile build chain
+    expo_token = None
+    try:
+        expo_token = APIManager().get_expo_token()
+    except Exception:
+        pass
+    add("Expo token (APK builds)", bool(expo_token),
+        "run: anyplace login-expo" if not expo_token else "configured",
+        optional=True)
+
+    qr_ok = _qr_available()
+    add("QR rendering", qr_ok,
+        "available" if qr_ok else "scannable APK links: pip install qrcode",
+        optional=True)
+
+    console.print(table)
+
+    if problems == 0:
+        console.print("\n[bold green]✅ All good — you're ready to build.[/bold green]")
+        console.print("Start with: [bold]anyplace[/bold]")
+    else:
+        console.print(f"\n[bold yellow]⚠️  {problems} thing(s) need attention.[/bold yellow]")
+        console.print("Fix the ❌ rows above, then re-run [bold]anyplace doctor[/bold].")
+
+
+def _qr_available() -> bool:
+    """Whether the optional QR dependency is importable."""
+    from anyplace.cli import qr
+
+    return qr.is_available()
+
+
 @cli.command()
 def serve():
-    """Start the AnywhereCode MCP server for Claude integration."""
+    """Start the AnywhereCode MCP server so AI agents can drive the tool."""
     console.print("[bold cyan]🔌 Starting AnywhereCode MCP server...[/bold cyan]")
-    console.print("[dim]Claude can now call: list_templates, generate_plan, generate_project[/dim]")
+    console.print("[dim]MCP clients can now call: list_templates, generate_plan, generate_project[/dim]")
 
     try:
         from anyplace.mcp.server import mcp
@@ -986,9 +1248,4 @@ def _wait_for_server(result):
 
 
 if __name__ == "__main__":
-    # Just typing 'anyplace' with no args starts the interactive mode
-    import sys
-    if len(sys.argv) == 1:
-        main(standalone_mode=False)
-    else:
-        cli(prog_name="anyplace")
+    cli(prog_name="anyplace")

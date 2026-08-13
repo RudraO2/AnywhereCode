@@ -14,8 +14,28 @@ from anyplace.cli.error_handler import ConfigError
 
 console = Console()
 
-# Provider information
+# Provider information.
+#
+# Order matters — this is the list a first-time user sees, and OmniRoute is
+# first because it is the only option that needs no signup, no credit card
+# and no API key at all.
 PROVIDERS = {
+    "omniroute": {
+        "display_name": "OmniRoute — FREE, no API key, no signup ⭐",
+        "docs_url": "https://github.com/diegosouzapw/OmniRoute",
+        "key_format": "(optional)",
+        "key_help": (
+            "OmniRoute is a free MIT-licensed gateway you run locally. It pools\n"
+            "the free tiers of 90+ providers (~1.5 billion tokens/month) behind\n"
+            "one endpoint, and the `auto` model works with NO API key at all."
+        ),
+        "keyless": True,
+        "models": [
+            ("auto", "Recommended - auto-routes across free providers, falls over on quota"),
+            ("google/gemini-2.0-flash", "Pin to Gemini Flash"),
+            ("groq/llama-3.3-70b-versatile", "Pin to Llama on Groq (very fast)"),
+        ],
+    },
     "claude": {
         "display_name": "Claude (Anthropic)",
         "docs_url": "https://console.anthropic.com",
@@ -39,15 +59,21 @@ PROVIDERS = {
         ]
     },
     "openrouter": {
-        "display_name": "OpenRouter (Access 100+ Models)",
+        "display_name": "OpenRouter (100+ models, free tier available)",
         "docs_url": "https://openrouter.ai",
         "key_format": "sk-or-...",
-        "key_help": "Get your API key from https://openrouter.ai/keys",
+        "key_help": (
+            "Get a free API key from https://openrouter.ai/keys\n"
+            "No credit card needed — `:free` models work on a $0 balance."
+        ),
         "models": [
-            ("anthropic/claude-3.5-sonnet", "Claude via OpenRouter"),
-            ("google/gemini-2.0-flash-exp", "Gemini via OpenRouter"),
-            ("mistralai/mistral-large", "Mistral - Alternative"),
-            ("meta-llama/llama-3.1-405b-instruct", "Llama - Open source"),
+            # `:free` variants first: a new user with a $0 balance can run
+            # these immediately, which is the whole point of listing them.
+            ("deepseek/deepseek-chat-v3-0324:free", "FREE - strong at code"),
+            ("qwen/qwen-2.5-coder-32b-instruct:free", "FREE - code specialist"),
+            ("meta-llama/llama-3.3-70b-instruct:free", "FREE - general purpose"),
+            ("anthropic/claude-3.5-sonnet", "Paid - best quality"),
+            ("google/gemini-2.0-flash-exp", "Paid - fast"),
         ]
     },
     "custom": {
@@ -61,6 +87,39 @@ PROVIDERS = {
         ]
     }
 }
+
+
+def quick_setup() -> bool:
+    """
+    First-run fast path: get to a working provider in as few taps as possible.
+
+    A newcomer on a phone will not go and create an Anthropic account before
+    trying the tool, so the default branch here is the one that needs nothing.
+
+    Returns:
+        True if a provider ended up configured.
+    """
+    api_mgr = APIManager()
+
+    console.print(Panel(
+        Text.from_markup(
+            "[bold]1.[/bold] 🆓 Free, no signup — OmniRoute gateway "
+            "[dim](~1.5B free tokens/month)[/dim]\n"
+            "[bold]2.[/bold] 🔑 I already have an API key "
+            "[dim](Claude, Gemini, OpenRouter…)[/dim]"
+        ),
+        title="⚡ Pick how you want to power AnywhereCode",
+        border_style="cyan",
+    ))
+
+    choice = click.prompt("\nChoice", type=click.IntRange(1, 2), default=1)
+
+    if choice == 1:
+        configure_single_provider(api_mgr, "omniroute")
+    else:
+        configure_providers()
+
+    return bool(api_mgr.list_providers())
 
 
 def configure_providers():
@@ -89,24 +148,65 @@ def configure_providers():
         configure_single_provider(api_mgr, provider_key)
 
 
+def _check_omniroute() -> bool:
+    """
+    Probe for a local OmniRoute gateway, printing setup help if it is absent.
+
+    Returns True when the gateway is reachable.
+    """
+    from anyplace.core.llm_provider import omniroute_is_running, OMNIROUTE_DEFAULT_URL
+
+    console.print("[dim]Looking for a local OmniRoute gateway…[/dim]")
+
+    if omniroute_is_running():
+        console.print(f"[bold green]✅ Found OmniRoute[/bold green] at {OMNIROUTE_DEFAULT_URL}\n")
+        return True
+
+    console.print("[yellow]No gateway running yet.[/yellow] Start one with:\n")
+    console.print("  [bold]npm install -g omniroute && omniroute[/bold]\n")
+    console.print(
+        "[dim]It runs on port 20128 and needs no account. Leave it running in a\n"
+        "second Termux session (swipe from the left edge → New session).[/dim]\n"
+    )
+    return False
+
+
 def configure_single_provider(api_mgr: APIManager, provider: str):
     """Configure a single provider."""
     info = PROVIDERS[provider]
+    keyless = info.get("keyless", False)
 
     console.print(f"\n[bold cyan]Setting up {info['display_name']}[/bold cyan]\n")
     console.print(f"Documentation: {info['docs_url']}\n")
-
-    # Get API key
     console.print(info["key_help"])
-    api_key = click.prompt(
-        "\nEnter API key",
-        hide_input=True,
-        confirmation_prompt=False
-    )
+    console.print()
 
-    if not api_key:
-        console.print("[yellow]Skipped[/yellow]")
-        return
+    if provider == "omniroute":
+        running = _check_omniroute()
+        if not running and not click.confirm(
+            "Save this config anyway and start the gateway later?", default=True
+        ):
+            return
+
+    if keyless:
+        # The gateway accepts anonymous requests for free providers, so an
+        # empty key is a valid answer here — not a cancelled setup.
+        api_key = click.prompt(
+            "API key (press Enter to skip — free providers need none)",
+            hide_input=True,
+            default="",
+            show_default=False,
+        )
+    else:
+        api_key = click.prompt(
+            "Enter API key",
+            hide_input=True,
+            confirmation_prompt=False,
+        )
+
+        if not api_key:
+            console.print("[yellow]Skipped[/yellow]")
+            return
 
     # Select model
     console.print(f"\n[bold]Available models:[/bold]")
@@ -130,14 +230,21 @@ def configure_single_provider(api_mgr: APIManager, provider: str):
     else:
         model_id = model_choice
 
-    # Handle custom endpoint
+    # Endpoint URL — required for custom, overridable for OmniRoute
     kwargs = {}
     if provider == "custom":
-        base_url = click.prompt(
-            "Base URL (e.g., https://api.example.com)",
-            type=str
+        kwargs["base_url"] = click.prompt(
+            "Base URL (e.g., https://api.example.com/v1)",
+            type=str,
         )
-        kwargs["base_url"] = base_url
+    elif provider == "omniroute":
+        from anyplace.core.llm_provider import OMNIROUTE_DEFAULT_URL
+
+        kwargs["base_url"] = click.prompt(
+            "Gateway URL",
+            type=str,
+            default=OMNIROUTE_DEFAULT_URL,
+        )
 
     # Save configuration
     try:
@@ -150,8 +257,10 @@ def configure_single_provider(api_mgr: APIManager, provider: str):
         panel_text = Text()
         panel_text.append(f"Provider: {provider.upper()}\n")
         panel_text.append(f"Model: {model_id}\n")
-        if provider == "custom" and kwargs:
-            panel_text.append(f"Endpoint: {kwargs['base_url']}")
+        if kwargs.get("base_url"):
+            panel_text.append(f"Endpoint: {kwargs['base_url']}\n")
+        if keyless and not api_key:
+            panel_text.append("Auth: none (keyless free tier)")
 
         console.print(
             Panel(panel_text, title="✅ Configured", border_style="green")

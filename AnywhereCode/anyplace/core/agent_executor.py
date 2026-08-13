@@ -151,7 +151,7 @@ class AgentExecutor:
     - Two modes: human_accept=True (default) asks user before each step
     - human_accept=False runs everything automatically
 
-    Like Claude Code — it doesn't tell you what to do, it just does it (safely).
+    The point is that it doesn't tell you what to run next — it runs it, safely.
     """
 
     def __init__(
