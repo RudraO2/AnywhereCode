@@ -22,20 +22,18 @@ class DeployGenerator:
         self.build_runner = BuildRunner(self.project_dir)
 
     def generate_eas_config(self) -> str:
-        """Generate eas.json content for Expo/React Native projects."""
-        config = {
-            "cli": {"version": ">= 5.0.0"},
-            "build": {
-                "development": {
-                    "developmentClient": True,
-                    "distribution": "internal",
-                },
-                "preview": {"distribution": "internal"},
-                "production": {},
-            },
-            "submit": {"production": {}},
-        }
-        return json.dumps(config, indent=2)
+        """
+        Generate eas.json content for Expo/React Native projects.
+
+        Delegates to EASBuilder so this and `anyplace apk` can never disagree
+        about the profiles — in particular the preview profile has to produce
+        an APK, since EAS defaults Android to an AAB you cannot sideload.
+        """
+        from anyplace.core.eas_builder import EASBuilder
+
+        builder = EASBuilder(self.project_dir)
+        builder.ensure_eas_json()
+        return (self.project_dir / "eas.json").read_text()
 
     def generate_pm2_config(self) -> str:
         """Generate ecosystem.config.js for Node.js backends using PM2."""
@@ -103,13 +101,18 @@ class DeployGenerator:
         next_steps: List[str] = []
 
         if project_type == "expo-rn" and target == "eas":
-            eas_path = self.project_dir / "eas.json"
-            eas_path.write_text(self.generate_eas_config())
-            files_written.append(str(eas_path))
+            from anyplace.core.eas_builder import EASBuilder
+
+            builder = EASBuilder(self.project_dir)
+            files_written.extend(builder.ensure_app_config(self.project_dir.name))
+            files_written.extend(builder.ensure_eas_json())
+            if not files_written:
+                files_written.append(str(self.project_dir / "eas.json"))
+
             next_steps = [
-                "npm install -g eas-cli",
-                "eas login",
-                "eas build --platform all",
+                "anyplace login-expo   (paste a token from expo.dev/settings/access-tokens)",
+                "anyplace apk          (builds an installable APK in the cloud)",
+                "anyplace apk --profile production   (AAB for the Play Store)",
             ]
 
         elif target == "github":

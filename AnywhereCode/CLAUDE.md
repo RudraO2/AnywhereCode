@@ -1,8 +1,15 @@
 # AnywhereCode - Project Context
 
-**Repository**: `rudrao2/classic-snake-made-using-qwen-`  
+**Repository**: `rudrao2/classic-snake-made-using-qwen-` (name is stale — the
+repo originally held a Snake game; it now holds AnywhereCode only)  
 **Branch**: `main`  
-**Status**: MVP 100% Complete ✅ + Agentic Pipeline ✅
+**Status**: Agentic pipeline ✅ + Cloud APK builds ✅ + Keyless free tier ✅
+
+> **Read this first if you are picking the project up cold.** Sections below
+> marked *(historical)* describe the phase-by-phase MVP build-out and are kept
+> for context. The current shape of the project is in
+> **[Cloud APK builds + free tokens](#-cloud-apk-builds--free-tokens-august-2026)**
+> at the bottom, which supersedes anything above it that disagrees.
 
 ---
 
@@ -19,7 +26,7 @@
 
 ---
 
-## 📊 Current Progress
+## 📊 Progress *(historical — phases 1-6)*
 
 ### ✅ Completed (Phases 1-3)
 
@@ -569,6 +576,96 @@ None known at time of writing. If the next session finds new bugs, add them here
 
 ---
 
-**Last Updated**: April 2026  
-**Session ID**: Latest development session  
+---
+
+## 📱 Cloud APK builds + free tokens (August 2026)
+
+**This section supersedes anything above it.** Two changes reframe what the
+project is for.
+
+### 1. `anyplace apk` — Android builds from a phone
+
+New file: **`anyplace/core/eas_builder.py`**.
+
+Gradle cannot realistically run inside Termux, which used to make "build an
+Android app on your phone" impossible. EAS runs Gradle on Expo's servers, so
+the phone only uploads source and downloads an APK.
+
+Four failure modes are handled explicitly — each one is load-bearing, do not
+"simplify" them away:
+
+| Problem | Why it breaks | Fix in `eas_builder.py` |
+|---|---|---|
+| EAS defaults Android to **AAB** | An App Bundle cannot be sideloaded — you wait 15 min for an uninstallable file | `preview` profile pinned to `buildType: "apk"` |
+| Missing `android.package` | eas-cli stops to ask, deadlocking `--non-interactive` | Derived via `sanitize_package_name()` |
+| Missing `appVersionSource` | Same deadlock, different prompt | Defaulted to `"remote"` in `eas.json` |
+| First build has no keystore | eas-cli **refuses** to generate one in `--non-interactive` | Detect that error, retry attached to the tty |
+
+`ensure_eas_json()` and `ensure_app_config()` **merge, never overwrite** — a
+user's own profiles and package name survive. Both are idempotent, so builds
+don't dirty git.
+
+Getting the APK onto a device: a terminal QR code (`anyplace/cli/qr.py`,
+half-block rendering so it fits a phone screen) for a second device, or
+`--install` which downloads and calls `termux-open` to launch Android's
+installer on the build device itself.
+
+Auth is via `EXPO_TOKEN` (`anyplace login-expo`), because interactive
+`eas login` needs a browser round-trip that is awkward in Termux.
+
+### 2. OmniRoute — zero-signup free tier
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) is a local
+OpenAI-compatible gateway pooling 90+ providers' free tiers (~1.5B
+tokens/month). Its `auto` model works **with no API key**, so a new user can go
+from install to generated project without an account.
+
+- `KEYLESS_PROVIDERS` in `llm_provider.py` lets `_setup_provider` accept an
+  empty key; `_call_openai_compat` omits the `Authorization` header entirely
+  when there is no key (an empty bearer token gets rejected).
+- `response_format` is **not** sent for omniroute — `auto` can land on any
+  upstream provider and many reject it with a hard 400. JSON is coaxed via the
+  system prompt plus the existing tolerant extractor instead.
+- `validate_api_key()` returns True for an empty omniroute key.
+- It is listed **first** in the config wizard; `quick_setup()` makes it the
+  default branch on first run.
+
+### 3. Onboarding fixes
+
+- **Bare `anyplace` was broken.** The `__main__` guard that dispatched to
+  interactive mode never ran via the `console_scripts` entry point, so
+  `anyplace` printed help. Now `@click.group(invoke_without_command=True)`.
+- **`curl | bash` install prompt was broken.** stdin is the script itself when
+  piped, so the trailing `read` could never work. Now reads from `/dev/tty`,
+  and skips when there's no terminal.
+- `anyplace doctor` — checks python/git/node/storage/provider/Expo token/QR
+  and prints the exact fix command for each.
+- Ctrl+C in the interactive menu no longer renders an empty red error panel.
+
+### Testing
+
+```bash
+python3 test_e2e.py     # 9 tests  — pre-existing, still green
+python3 test_eas.py     # 42 tests — new, fully offline
+```
+
+`test_eas.py` fakes the subprocess boundary, so no eas-cli, network or
+credentials are needed. The assertion that matters most is
+*"preview profile builds an APK"* — if that ever flips to `app-bundle`, the
+core promise of the project silently breaks.
+
+### Known gaps / good next steps
+
+- **iOS builds** — plumbing is platform-agnostic (`--platform ios`), but the
+  Apple Developer credential flow is untested.
+- **The repo name** is still `Classic-Snake-Made-using-Qwen-`, which costs
+  discoverability. Renaming to `AnywhereCode` is an owner action.
+- `eas-cli` JSON output is parsed defensively (`_parse_build_json`) because its
+  shape has changed across versions — re-check against new eas-cli releases.
+- OmniRoute model IDs in the wizard are illustrative; the gateway's real
+  catalogue is discoverable via `omniroute_list_models()`.
+
+---
+
+**Last Updated**: August 2026  
 **Branch**: `main`

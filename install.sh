@@ -1,12 +1,14 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────
-# AnywhereCode — One-command installer for Termux / Linux
+# AnywhereCode — One-command installer for Termux / Linux / macOS
 #
-# Usage (Termux):
+# Usage:
 #   curl -sL https://raw.githubusercontent.com/RudraO2/Classic-Snake-Made-using-Qwen-/main/install.sh | bash
 #
-# Or manually:
+# Or, after cloning:
 #   bash install.sh
+#
+# Set ANYPLACE_NO_PROMPT=1 to skip the interactive setup at the end.
 # ──────────────────────────────────────────────────────────
 
 set -e
@@ -40,7 +42,7 @@ if [ -d "/data/data/com.termux" ] || [ -n "$TERMUX_APP_PID" ]; then
     IS_TERMUX=true
     info "Detected: Termux on Android"
 else
-    info "Detected: Linux / Desktop"
+    info "Detected: $(uname -s)"
 fi
 
 # ── Step 2: Install system dependencies ───────────────────
@@ -48,38 +50,41 @@ info "Installing system packages..."
 
 if $IS_TERMUX; then
     pkg update -y >/dev/null 2>&1 || true
+    # nodejs is not optional: it powers both JS project builds and the
+    # eas-cli that produces APKs.
     pkg install -y python git nodejs >/dev/null 2>&1 || {
         warn "Some packages may already be installed"
     }
-    # Setup storage access if not done
+
+    # Without storage access there is nowhere safe to drop a built APK.
     if [ ! -d "$HOME/storage" ]; then
-        warn "Run 'termux-setup-storage' if you want projects in Downloads"
+        info "Requesting storage access (approve the Android prompt)..."
+        termux-setup-storage 2>/dev/null || \
+            warn "Run 'termux-setup-storage' manually to save projects to Downloads"
+        sleep 2
     fi
 else
-    # Check python3
-    if ! command -v python3 &>/dev/null; then
-        fail "python3 not found. Install Python 3.8+ first."
-    fi
-    # Check git
-    if ! command -v git &>/dev/null; then
-        fail "git not found. Install git first."
-    fi
+    command -v python3 >/dev/null 2>&1 || fail "python3 not found. Install Python 3.8+ first."
+    command -v git >/dev/null 2>&1 || fail "git not found. Install git first."
+    command -v node >/dev/null 2>&1 || \
+        warn "Node.js not found — needed for JS projects and APK builds"
 fi
 
 ok "System packages ready"
 
 # ── Step 3: Clone or update the repo ─────────────────────
 INSTALL_DIR="$HOME/.anyplace/app"
+REPO_URL="https://github.com/RudraO2/Classic-Snake-Made-using-Qwen-.git"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
     info "Updating existing installation..."
-    cd "$INSTALL_DIR"
-    git pull origin main >/dev/null 2>&1 || true
-    ok "Updated to latest version"
+    git -C "$INSTALL_DIR" pull origin main >/dev/null 2>&1 || \
+        warn "Could not pull latest changes — keeping current version"
+    ok "Up to date"
 else
     info "Downloading AnywhereCode..."
     mkdir -p "$HOME/.anyplace"
-    git clone https://github.com/RudraO2/Classic-Snake-Made-using-Qwen-.git "$INSTALL_DIR" >/dev/null 2>&1 || {
+    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" >/dev/null 2>&1 || {
         fail "Failed to clone repository. Check your internet connection."
     }
     ok "Downloaded"
@@ -87,10 +92,13 @@ fi
 
 # ── Step 4: Install Python dependencies ──────────────────
 info "Installing Python dependencies..."
-cd "$INSTALL_DIR/AnywhereCode"
 
-pip install --quiet requests click pyyaml rich 2>/dev/null || \
-pip3 install --quiet requests click pyyaml rich 2>/dev/null || {
+PIP=pip3
+command -v pip3 >/dev/null 2>&1 || PIP=pip
+
+# Every one of these is pure Python — nothing here needs a Rust or C
+# toolchain, which is what keeps the install working on Termux/aarch64.
+$PIP install --quiet requests click pyyaml rich qrcode 2>/dev/null || {
     fail "Failed to install Python packages"
 }
 
@@ -99,14 +107,13 @@ ok "Python dependencies installed"
 # ── Step 5: Create the 'anyplace' command ────────────────
 info "Setting up 'anyplace' command..."
 
-# Create a simple wrapper script
 WRAPPER_DIR="$HOME/.local/bin"
 mkdir -p "$WRAPPER_DIR"
 
 cat > "$WRAPPER_DIR/anyplace" << 'WRAPPER'
 #!/usr/bin/env python3
 import sys, os
-# Add the app to Python path
+
 app_dir = os.path.expanduser("~/.anyplace/app/AnywhereCode")
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
@@ -117,44 +124,63 @@ WRAPPER
 
 chmod +x "$WRAPPER_DIR/anyplace"
 
-# Make sure ~/.local/bin is in PATH
+# Make sure ~/.local/bin is on PATH, without duplicating the export line
+# on every re-run of this installer.
 if [[ ":$PATH:" != *":$WRAPPER_DIR:"* ]]; then
-    # Add to shell profile
     SHELL_RC="$HOME/.bashrc"
-    if [ -f "$HOME/.zshrc" ]; then
-        SHELL_RC="$HOME/.zshrc"
+    [ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.zshrc"
+
+    if ! grep -q 'AnywhereCode' "$SHELL_RC" 2>/dev/null; then
+        {
+            echo ""
+            echo "# AnywhereCode"
+            echo 'export PATH="$HOME/.local/bin:$PATH"'
+        } >> "$SHELL_RC"
+        warn "Added ~/.local/bin to PATH in $SHELL_RC"
     fi
-    echo "" >> "$SHELL_RC"
-    echo '# AnywhereCode' >> "$SHELL_RC"
-    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_RC"
     export PATH="$WRAPPER_DIR:$PATH"
-    warn "Added ~/.local/bin to PATH in $SHELL_RC"
 fi
 
 ok "'anyplace' command installed"
 
-# ── Step 6: First-time setup prompt ──────────────────────
+# ── Step 6: Wrap up ──────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}  Installation complete!${NC}"
 echo ""
 echo -e "  ${BOLD}Quick start:${NC}"
-echo -e "    ${CYAN}anyplace${NC}              — Start creating a project"
-echo -e "    ${CYAN}anyplace configure${NC}    — Set up your AI API key"
+echo -e "    ${CYAN}anyplace${NC}              — Create a project (guides you through setup)"
+echo -e "    ${CYAN}anyplace doctor${NC}       — Check everything is working"
+echo -e "    ${CYAN}anyplace apk${NC}          — Build an installable Android APK"
 echo ""
 
 if $IS_TERMUX; then
-    echo -e "  ${YELLOW}Tip:${NC} If 'anyplace' command not found, run:"
-    echo -e "    ${CYAN}source ~/.bashrc${NC}"
-    echo ""
-    echo -e "  ${YELLOW}Projects will save to:${NC} ~/Downloads/"
+    echo -e "  ${YELLOW}If 'anyplace' is not found:${NC} ${CYAN}source ~/.bashrc${NC}"
+    echo -e "  ${YELLOW}Projects save to:${NC} ~/storage/downloads/"
 else
-    echo -e "  ${YELLOW}Projects will save to:${NC} ~/.anyplace/projects/"
+    echo -e "  ${YELLOW}Projects save to:${NC} ~/.anyplace/projects/"
 fi
 echo ""
 
-# Ask if user wants to configure now
-echo -e -n "  Set up your AI provider now? [Y/n] "
-read -r CONFIGURE
-if [ "$CONFIGURE" != "n" ] && [ "$CONFIGURE" != "N" ]; then
-    "$WRAPPER_DIR/anyplace" configure
+# When this script is piped into bash (`curl … | bash`), stdin is the script
+# itself — a plain `read` would consume script text or hit EOF instantly. Read
+# from the terminal directly, and skip the prompt when there is no terminal.
+if [ -n "$ANYPLACE_NO_PROMPT" ]; then
+    exit 0
 fi
+
+if [ ! -t 0 ] && [ ! -r /dev/tty ]; then
+    info "Non-interactive install — run 'anyplace' when you're ready."
+    exit 0
+fi
+
+echo -e -n "  Set up your AI provider now? [Y/n] "
+if [ -t 0 ]; then
+    read -r CONFIGURE
+else
+    read -r CONFIGURE < /dev/tty
+fi
+
+case "$CONFIGURE" in
+    n|N|no|NO) echo -e "  Run ${CYAN}anyplace${NC} whenever you're ready." ;;
+    *) "$WRAPPER_DIR/anyplace" configure < /dev/tty ;;
+esac

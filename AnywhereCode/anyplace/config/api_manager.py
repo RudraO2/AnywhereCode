@@ -100,7 +100,7 @@ class APIManager:
             if not providers:
                 raise ConfigError(
                     "No LLM provider configured.\n"
-                    "Run: anyplace --configure"
+                    "Run: anyplace configure"
                 )
             active = list(providers.keys())[0]
 
@@ -119,6 +119,35 @@ class APIManager:
         # Check required fields
         required = ["api_key", "model"]
         return all(config.get(field) for field in required)
+
+    def get_setting(self, key: str, default=None):
+        """Read a non-provider setting (Expo tokens, preferences, ...)."""
+        return self.config.get("settings", {}).get(key, default)
+
+    def set_setting(self, key: str, value):
+        """
+        Persist a non-provider setting.
+
+        Shares config.yaml with the provider keys, which is already chmod 600
+        on save — so secrets like the Expo access token stay owner-only.
+        """
+        self.config.setdefault("settings", {})[key] = value
+        self._save_config()
+
+    def get_expo_token(self) -> Optional[str]:
+        """
+        Get the Expo access token used for headless EAS builds.
+
+        An EXPO_TOKEN already in the environment wins, so CI and shell exports
+        keep working without touching the stored config.
+        """
+        import os
+
+        return os.environ.get("EXPO_TOKEN") or self.get_setting("expo_token")
+
+    def set_expo_token(self, token: str):
+        """Store the Expo access token for future EAS builds."""
+        self.set_setting("expo_token", token.strip())
 
     def reset_config(self):
         """Reset configuration to default."""

@@ -1,77 +1,36 @@
 # AnywhereCode
 
-**Code anywhere, anytime - Generate projects on your phone, laptop, or anywhere in between.**
+**Build a real Android app on your phone. No laptop. No Android Studio. No credit card.**
 
-A CLI tool for generating production-ready projects using AI. Create Android apps, web applications, full-stack projects, and more with intelligent scaffolding and guidance.
-
-## Features
-
-- 🎯 **AI-Powered Planning** - Plan before code: see all files before generation
-- 📱 **Mobile-First** - Optimized for Termux/Android, generates to ~/Downloads for safety
-- 🔌 **Multi-Provider LLM** - Use Claude, Gemini, OpenRouter, or custom models
-- 🎨 **Template Boilerplate** - Templates are just structure, you control the design
-- ⚡ **Sequential Generation** - Safe file dependencies with intelligent ordering
-- 🛠️ **Claude Skills** - Integration with /commit, /build, /deploy skills
-- 🔗 **MCP Servers** - Extensible via MCP for more capabilities
-
-## Installation
+This directory holds the `anyplace` Python package. The full documentation —
+quickstart, APK builds, free-token setup, contributing — lives in the
+[repository README](../README.md).
 
 ```bash
 pip install -e .
-```
-
-## Quick Start
-
-```bash
 anyplace
 ```
 
-Follow the menu to:
-1. Select a project type (Web, Mobile, Backend, etc.)
-2. Choose your AI provider (Claude, Gemini, OpenRouter)
-3. Review the plan before generation
-4. Watch as AnywhereCode generates your project
-5. Start coding!
+## Tests
 
-## Project Types
-
-- **Android Native** (Kotlin)
-- **React Native + Expo** (Cross-platform mobile)
-- **React SPA** (Single Page App)
-- **Next.js** (Full-stack)
-- **Node.js API** (Backend)
-- **FastAPI** (Python backend)
-
-## Configuration
-
-Set your API keys in `~/.config/anyplace/config.yaml`:
-
-```yaml
-# Claude
-providers:
-  claude:
-    api_key: sk-ant-...
-    model: claude-3-5-sonnet
-
-# Google Gemini
-  gemini:
-    api_key: AIza...
-    model: gemini-2.0-flash
-
-# OpenRouter (access 100+ models)
-  openrouter:
-    api_key: sk-or-...
-    model: anthropic/claude-3.5-sonnet
-
-# Custom API endpoint
-  custom:
-    api_key: your-key
-    base_url: https://custom-api.example.com
-    model: your-model-id
+```bash
+python3 test_e2e.py     # 9 tests — end-to-end with a mock LLM
+python3 test_eas.py     # 42 tests — EAS cloud builds + OmniRoute provider
 ```
 
-## Docs
+Both run offline with no API keys.
 
-- [Architecture](./docs/architecture.md)
-- [Templates](./docs/templates.md)
-- [Contributing](./docs/contributing.md)
+## Layout
+
+```
+anyplace/
+├── cli/          command interface, config wizard, QR rendering
+├── core/         plan → code → git → agentic pipeline → EAS builds
+├── config/       API keys, platform detection (Termux vs desktop)
+├── templates/    project boilerplate (structure only, not design)
+└── mcp/          MCP server so Claude can drive the tool
+```
+
+## License
+
+MIT
