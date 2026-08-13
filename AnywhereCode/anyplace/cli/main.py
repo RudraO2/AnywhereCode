@@ -953,6 +953,136 @@ def run(project_dir, skip_deploy, auto_accept):
     _wait_for_server(result)
 
 
+@cli.command()
+@click.argument("prompt", nargs=-1, required=True)
+@click.option("--template", default=None,
+              help="Force a template instead of inferring one from the prompt")
+@click.option("--name", "project_name", default=None,
+              help="Force a project name instead of inferring one")
+@click.option("--target", type=click.Choice(["pwa", "apk", "none"]),
+              default="pwa", show_default=True,
+              help="pwa = installable web app (fast, no accounts); apk = native Android build")
+@click.option("--out", "out_dir", type=click.Path(), default=None,
+              help="Where to create the project (defaults to your projects directory)")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit a machine-readable summary (for scripts and CI)")
+def create(prompt, template, project_name, target, out_dir, as_json):
+    """
+    Build an app from one sentence. No menus, no questions.
+
+        anyplace create "a habit tracker with streaks"
+
+    The template and project name are inferred from your prompt. With the
+    default --target pwa the result is installable from a browser via
+    "Add to Home Screen" — no Expo account and no 15-minute build.
+    """
+    import json as jsonlib
+
+    from anyplace.core.intent import infer_intent
+    from anyplace.core.pwa_builder import PWABuilder
+
+    text = " ".join(prompt).strip()
+    # In --json mode every human-facing line must stay off stdout, or the
+    # caller cannot parse the result.
+    log = (lambda *a, **k: None) if as_json else console.print
+    result = {"prompt": text, "success": False}
+
+    try:
+        api_mgr = APIManager()
+        if not api_mgr.list_providers():
+            raise ConfigError("No LLM provider configured. Run: anyplace configure")
+        llm = LLMProvider(api_mgr)
+
+        log(f"\n[bold cyan]💡 {text}[/bold cyan]\n")
+
+        intent = infer_intent(text, llm_provider=llm,
+                              template_override=template, name_override=project_name)
+        result["intent"] = intent.to_dict()
+        log(f"  [dim]→ {intent.template} · {intent.project_name}[/dim]")
+        if intent.reasoning:
+            log(f"  [dim]  {intent.reasoning}[/dim]")
+
+        log("\n[bold cyan]🤖 Planning…[/bold cyan]")
+        plan = PlanGenerator(llm).generate_plan(
+            template_name=intent.template,
+            project_name=intent.project_name,
+            description=text,
+        )
+        result["files_planned"] = len(plan.files)
+        log(f"  [dim]{len(plan.files)} files[/dim]")
+
+        log("[bold cyan]⚙️  Generating…[/bold cyan]")
+        orchestrator = BuildOrchestrator(
+            plan=plan,
+            llm_provider=llm,
+            project_dir=Path(out_dir).resolve() if out_dir else None,
+            use_git=True,
+            agentic=True,
+            human_accept=False,  # one-shot: never block on a prompt
+        )
+        if not orchestrator.build(
+            agent_callback=None if as_json else (lambda s, m: console.print(f"  [cyan]⚡ {s}[/cyan] {m}")),
+        ):
+            raise GenerationError("Project generation failed.")
+
+        info = orchestrator.get_project_info()
+        project_dir = Path(info["project_dir"])
+        result.update({
+            "project_dir": str(project_dir),
+            "project_name": info["project_name"],
+            "files_generated": info["files_generated"],
+        })
+        log(f"\n[bold green]✅ Created:[/bold green] {project_dir}")
+
+        if target == "pwa":
+            builder = PWABuilder(project_dir, app_name=intent.project_name)
+            written = builder.make_installable()
+            result["pwa_files"] = written
+            output = builder.find_build_output()
+            result["static_dir"] = str(output) if output else ""
+            log(f"[bold green]📲 Installable:[/bold green] {len(written)} PWA files added")
+            if output:
+                log(f"  [dim]deployable static output: {output}[/dim]")
+            else:
+                log("  [dim]run a build to produce static output for hosting[/dim]")
+
+        elif target == "apk":
+            from anyplace.core.eas_builder import EASBuilder
+
+            eas = EASBuilder(
+                project_dir,
+                progress_callback=None if as_json else (lambda s, m: console.print(f"  [cyan]⚡ {s}[/cyan] {m}")),
+                expo_token=api_mgr.get_expo_token(),
+            )
+            build_result = eas.build_apk(project_name=intent.project_name)
+            result["apk"] = {
+                "success": build_result.success,
+                "status": build_result.status,
+                "url": build_result.artifact_url,
+                "error": build_result.error,
+            }
+            if build_result.success:
+                log(f"\n[bold green]🎉 APK:[/bold green] {build_result.artifact_url}")
+            else:
+                log(f"\n[yellow]APK build did not finish:[/yellow] {build_result.error}")
+
+        result["success"] = True
+
+    except (ConfigError, GenerationError, APIError) as e:
+        result["error"] = str(e)
+        if not as_json:
+            exit_with_error(e, "Creating app")
+    except Exception as e:
+        result["error"] = str(e)
+        if not as_json:
+            exit_with_error(e, "Creating app")
+
+    if as_json:
+        click.echo(jsonlib.dumps(result, indent=2))
+    if not result["success"]:
+        raise SystemExit(1)
+
+
 @cli.command("login-expo")
 @click.option("--token", default=None, help="Expo access token (prompted if omitted)")
 def login_expo(token):
