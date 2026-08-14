@@ -2,3 +2,18 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Build artifacts
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Local config (may contain API keys)
+config.yaml
+.env

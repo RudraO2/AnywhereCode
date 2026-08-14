@@ -1,8 +1,9 @@
 """
 LLM Provider abstraction using direct HTTP calls.
 
-Handles Claude, Gemini, OpenRouter, and custom endpoints using only
-the `requests` library — no native build dependencies, works on Termux/Android.
+Handles Claude, Gemini, OpenRouter, OmniRoute, and custom endpoints using
+only the `requests` library — no native build dependencies, works on
+Termux/Android.
 """
 
 import json
@@ -13,6 +14,64 @@ import requests
 
 from anyplace.config.api_manager import APIManager
 from anyplace.cli.error_handler import APIError
+
+
+# OmniRoute is a self-hosted OpenAI-compatible gateway that fans one endpoint
+# out across hundreds of providers, pooling their free tiers. Its `auto` model
+# routes to keyless free providers, so it is the only way to run AnywhereCode
+# without signing up for anything.
+OMNIROUTE_DEFAULT_URL = "http://localhost:20128/v1"
+OMNIROUTE_DEFAULT_MODEL = "auto"
+
+# Providers that can operate without an API key.
+KEYLESS_PROVIDERS = {"omniroute"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OmniRoute discovery
+# ─────────────────────────────────────────────────────────────────────────────
+
+def omniroute_is_running(base_url: str = OMNIROUTE_DEFAULT_URL, timeout: int = 3) -> bool:
+    """
+    Check whether a local OmniRoute gateway is reachable.
+
+    Kept deliberately cheap and short-timeout: this runs during the config
+    wizard and on `anyplace doctor`, where a slow probe is worse than a
+    wrong answer the user can correct.
+    """
+    try:
+        response = requests.get(f"{base_url.rstrip('/')}/models", timeout=timeout)
+    except requests.exceptions.RequestException:
+        return False
+    # 401 still means something is listening — it just wants a key.
+    return response.status_code in (200, 401, 403)
+
+
+def omniroute_list_models(
+    base_url: str = OMNIROUTE_DEFAULT_URL,
+    api_key: str = "",
+    timeout: int = 10,
+) -> List[str]:
+    """Return model IDs advertised by a running OmniRoute gateway."""
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        response = requests.get(
+            f"{base_url.rstrip('/')}/models", headers=headers, timeout=timeout
+        )
+        response.raise_for_status()
+        data = response.json()
+    except (requests.exceptions.RequestException, ValueError):
+        return []
+
+    entries = data.get("data", []) if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return []
+
+    return [
+        entry["id"]
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -121,14 +180,16 @@ def _call_openai_compat(
     json_mode: bool,
     base_url: str,
     extra_headers: Optional[Dict] = None,
+    supports_response_format: bool = True,
 ) -> str:
-    """Call any OpenAI-compatible endpoint (OpenRouter, custom, etc.)."""
+    """Call any OpenAI-compatible endpoint (OpenRouter, OmniRoute, custom)."""
     url = f"{base_url.rstrip('/')}/chat/completions"
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    # A local gateway running in keyless mode rejects an empty bearer token,
+    # so only send the header when we actually have a key.
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     if extra_headers:
         headers.update(extra_headers)
 
@@ -143,7 +204,7 @@ def _call_openai_compat(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    if json_mode:
+    if json_mode and supports_response_format:
         body["response_format"] = {"type": "json_object"}
 
     resp = requests.post(url, headers=headers, json=body, timeout=120)
@@ -178,7 +239,7 @@ class LLMProvider:
             raise APIError("No LLM provider configured. Run: anyplace configure")
 
         self.api_key = config.get("api_key", "")
-        if not self.api_key:
+        if not self.api_key and provider_name not in KEYLESS_PROVIDERS:
             raise APIError(f"No API key for {provider_name}")
 
         self.provider = provider_name
@@ -197,6 +258,10 @@ class LLMProvider:
         elif provider_name == "openrouter":
             self.model = config.get("model", "anthropic/claude-3.5-sonnet")
             self.base_url = "https://openrouter.ai/api/v1"
+
+        elif provider_name == "omniroute":
+            self.model = config.get("model", OMNIROUTE_DEFAULT_MODEL)
+            self.base_url = config.get("base_url", OMNIROUTE_DEFAULT_URL)
 
         elif provider_name == "custom":
             self.model = config.get("model", "custom-model")
@@ -228,18 +293,33 @@ class LLMProvider:
                 response_schema=response_schema,
             )
 
-        # OpenRouter or custom — both are OpenAI-compatible
+        # OpenRouter, OmniRoute and custom endpoints are all OpenAI-compatible
         extra = (
             {"HTTP-Referer": "https://github.com/rudrao2/anywhereCode",
              "X-Title": "AnywhereCode"}
             if self.provider == "openrouter"
             else None
         )
+
+        # OmniRoute's `auto` model can land on any of hundreds of upstream
+        # providers, and not all of them accept `response_format`. Sending it
+        # turns a working request into a hard 400, so we lean on the prompt
+        # and the tolerant JSON extractor instead.
+        supports_response_format = self.provider != "omniroute"
+
+        if json_mode and not supports_response_format:
+            system = (
+                (system or "")
+                + "\n\nRespond with a single raw JSON object. No markdown fences, "
+                "no commentary before or after."
+            ).strip()
+
         return _call_openai_compat(
             self.api_key, self.model, user_messages,
             system, temperature, max_tokens, json_mode,
             base_url=self.base_url,
             extra_headers=extra,
+            supports_response_format=supports_response_format,
         )
 
     def generate_text(
@@ -452,6 +532,11 @@ class LLMProvider:
                 "anthropic/claude-3.5-sonnet",
                 "google/gemini-2.0-flash-exp",
                 "mistralai/mistral-large",
+            ],
+            "omniroute": [
+                OMNIROUTE_DEFAULT_MODEL,
+                "google/gemini-2.0-flash",
+                "groq/llama-3.3-70b-versatile",
             ],
             "custom": ["your-custom-model"],
         }

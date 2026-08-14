@@ -185,10 +185,15 @@ def validate_api_key(api_key: str, provider: str) -> bool:
     Returns:
         True if valid, False otherwise
     """
+    provider = provider.lower()
+
+    # OmniRoute runs locally and serves keyless free providers out of the box,
+    # so an empty key is a valid configuration rather than a mistake.
+    if provider == "omniroute":
+        return True
+
     if not api_key or not api_key.strip():
         return False
-
-    provider = provider.lower()
 
     if provider == "claude":
         return api_key.startswith("sk-ant-")

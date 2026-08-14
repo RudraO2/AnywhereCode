@@ -4,7 +4,7 @@ MCP server for AnywhereCode.
 Exposes fully agentic tools: generate a complete project end-to-end,
 install dependencies, build, deploy — all without manual steps.
 
-Claude or any MCP client can call these tools to autonomously create
+Any MCP client can call these tools to autonomously create
 and set up projects.
 
 Usage:
