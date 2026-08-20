@@ -129,6 +129,33 @@ halfway with a message the user can do nothing about.
 
 ---
 
+## Providers
+
+Four keyed providers (Gemini, Claude, OpenRouter, custom) and one keyless one
+(OmniRoute). Claude and Gemini have bespoke request builders; OpenRouter,
+OmniRoute and custom all share the OpenAI-compatible path in
+`llm_provider._call_openai_compat`.
+
+**Keyless providers are a real state, not an edge case.** `KEYLESS_PROVIDERS`
+lives in `anyplace/config/providers.py` — a module that imports nothing, so
+`core.doctor` (which may not import `anyplace.cli`) and the CLI can both use
+it. Three places branch on it:
+
+- `validate_api_key` accepts an empty key for those providers.
+- `_call_openai_compat` omits the `Authorization` header entirely when there is
+  no key — sending `Bearer ` with nothing after it makes some servers refuse.
+- `check_providers` does not report a missing key as a failure for them.
+
+If you add another keyless provider, adding it to that frozenset is the whole
+change.
+
+**Two Claude details that bite:** `temperature` is rejected with a 400 on the
+Claude 5 family and Opus 4.7/4.8, so `supports_sampling()` gates whether it
+goes in the body at all; and model ids are exact — never append a date suffix
+to `claude-haiku-4-5` and friends.
+
+---
+
 ## Tests
 
 ```bash

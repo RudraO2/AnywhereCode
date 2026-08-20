@@ -19,6 +19,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+# Dependency-free constants module: safe at import time from a pure-logic
+# module (it imports nothing itself, so no rendering stack comes with it).
+from anyplace.config.providers import needs_api_key
+
 PASS = "pass"
 WARN = "warn"
 FAIL = "fail"
@@ -643,8 +647,11 @@ def check_providers(api_manager: Optional[Any] = None) -> Check:
     listed = ", ".join(names)
     model = config.get("model") or ""
     has_key = bool(config.get("api_key"))
+    # A gateway you run yourself has no key to store; absence is correct there,
+    # not a misconfiguration.
+    wants_key = needs_api_key(active)
 
-    if not has_key:
+    if wants_key and not has_key:
         return Check(
             id="providers",
             title="LLM provider",
@@ -660,7 +667,7 @@ def check_providers(api_manager: Optional[Any] = None) -> Check:
             id="providers",
             title="LLM provider",
             status=WARN,
-            detail="Provider '{0}' has a key but no model selected.".format(active),
+            detail="Provider '{0}' has no model selected.".format(active),
             fix="anywhere configure",
         )
     return Check(

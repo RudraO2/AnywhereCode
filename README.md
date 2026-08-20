@@ -248,11 +248,42 @@ device except to reach the provider you chose.
 | Google Gemini | `AIza…` | Free tier — start here |
 | Claude | `sk-ant-…` | Best code quality; defaults to Claude Opus 5 |
 | OpenRouter | `sk-or-…` | One key, 100+ models |
+| OmniRoute | none | A gateway you run yourself — see below |
 | Custom | anything | Any OpenAI-compatible endpoint, including local |
 
 Configure with `anywhere configure`. It reads your key back masked so you can
 spot a paste error, then tests the connection immediately instead of failing
 three screens later.
+
+### OmniRoute
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) is an open-source AI
+gateway: one OpenAI-compatible endpoint in front of ~340 providers. Anywhere
+Code speaks to it as a first-class provider, and it is the only one that needs
+**no API key** — the gateway holds whatever keys you gave *it*.
+
+```bash
+npm install -g omniroute      # Node is already installed by install.sh
+omniroute                     # answers on localhost:20128
+anywhere configure            # pick OmniRoute, no key to paste
+```
+
+Worth knowing before you rely on it:
+
+- **It is self-hosted, not a service.** There is no URL to sign up for. It runs
+  on your device, which on a phone means a Node process sitting in memory
+  alongside everything else, and it has to be running whenever you build.
+- **"Free tokens" means aggregated free tiers, not a pool someone hands you.**
+  OmniRoute documents roughly 1.5B free tokens per month across ~43 provider
+  free tiers — but about 1B of that is Mistral alone, and nearly all of it
+  needs you to sign up with each provider and give OmniRoute the key. The
+  genuinely keyless providers (Pollinations, DuckDuckGo, Uncloseai) are
+  rate-limited rather than token-capped.
+- **Free tiers move.** Gemini cut its free limits substantially in late 2025.
+  Treat any headline number as a snapshot.
+
+If you just want something that works with one key and no background service,
+Gemini's free tier is still the shortest path.
 
 ---
 

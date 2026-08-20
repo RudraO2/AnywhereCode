@@ -11,6 +11,11 @@ from __future__ import annotations
 import sys
 from typing import Optional
 
+# Re-exported so callers already importing from here keep working. The facts
+# live in anyplace.config.providers because anyplace.core may not import
+# anyplace.cli, and doctor needs them too.
+from anyplace.config.providers import KEYLESS_PROVIDERS, needs_api_key
+
 # Exception types are imported by the core modules, so they must stay importable
 # without pulling in rich or the UI layer.
 
@@ -180,6 +185,10 @@ def validate_api_key(api_key: str, provider: str) -> bool:
     Deliberately permissive: providers change their prefixes, and refusing a
     valid key is worse than accepting an invalid one we're about to test anyway.
     """
+    if not needs_api_key(provider):
+        # A key is optional here; anything, including nothing, is acceptable.
+        return True
+
     if not api_key or not api_key.strip():
         return False
 

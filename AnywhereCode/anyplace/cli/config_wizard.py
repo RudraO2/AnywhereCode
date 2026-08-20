@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Callable, Dict, List, Optional
 
 from anyplace.cli.error_handler import ConfigError
+from anyplace.config.providers import needs_api_key
 from anyplace.config.api_manager import APIManager
 from anyplace.ui import components as ui
 from anyplace.ui.layout import Layout
@@ -53,6 +54,18 @@ PROVIDERS: Dict[str, Dict] = {
             ("meta-llama/llama-3.1-405b-instruct", "Llama, open weights"),
         ],
     },
+    "omniroute": {
+        "display_name": "OmniRoute",
+        "blurb": "Free models via a gateway you run",
+        "docs_url": "https://github.com/diegosouzapw/OmniRoute",
+        "key_format": "no key needed",
+        "models": [
+            ("auto", "Let OmniRoute pick"),
+            ("openai/gpt-oss-120b", "Open-weights, free tiers"),
+            ("google/gemini-2.0-flash", "Gemini via OmniRoute"),
+            ("anthropic/claude-sonnet-5", "Claude via OmniRoute"),
+        ],
+    },
     "custom": {
         "display_name": "Custom endpoint",
         "blurb": "Self-hosted or OpenAI-compatible",
@@ -67,7 +80,20 @@ PROVIDERS: Dict[str, Dict] = {
 
 #: Order shown to users — free-tier first, because that is the one that lets
 #: someone with no credit card get started.
-PROVIDER_ORDER: List[str] = ["gemini", "claude", "openrouter", "custom"]
+PROVIDER_ORDER: List[str] = ["gemini", "claude", "openrouter", "omniroute", "custom"]
+
+
+#: Shown instead of a key prompt. OmniRoute is not a service you sign up for:
+#: it runs on your own device, and Anywhere Code cannot start it for you.
+OMNIROUTE_NOTE = (
+    "OmniRoute is a gateway you run yourself — there is no hosted URL.\n\n"
+    "Install and start it:\n"
+    "  npm install -g omniroute\n"
+    "  omniroute\n\n"
+    "It answers on localhost:20128 and needs no key. Its free models come "
+    "from provider free tiers, most of which you sign up for inside "
+    "OmniRoute itself."
+)
 
 
 def mask_key(api_key: str) -> str:
@@ -176,29 +202,43 @@ def configure_single_provider(
 
     console.print()
     ui.rule(console, info["display_name"], layout=layout)
-    if info["docs_url"]:
-        console.print("Get a key: " + info["docs_url"], style=theme.style("info"))
-        console.print("It looks like: " + info["key_format"], style=theme.style("muted"))
 
-    try:
-        api_key = ask_text(
+    wants_key = needs_api_key(provider)
+
+    if wants_key:
+        if info["docs_url"]:
+            console.print("Get a key: " + info["docs_url"], style=theme.style("info"))
+            console.print("It looks like: " + info["key_format"], style=theme.style("muted"))
+
+        try:
+            api_key = ask_text(
+                console,
+                "Paste your API key",
+                layout=layout,
+                input_fn=input_fn,
+                help_text="Long-press the terminal to paste. It is stored only on this device.",
+            )
+        except GoBack:
+            return False
+
+        api_key = api_key.strip()
+        if not api_key:
+            ui.card(console, "No key entered — skipping.", title="Skipped", tone="warn", layout=layout)
+            return False
+
+        console.print("Read back: " + mask_key(api_key), style=theme.style("muted"))
+        if not ask_yes_no(console, "Does that look right?", default=True, layout=layout, input_fn=input_fn):
+            return configure_single_provider(console, api_mgr, provider, layout, input_fn)
+    else:
+        # Nothing to paste: the gateway holds whatever keys it needs.
+        api_key = ""
+        ui.card(
             console,
-            "Paste your API key",
+            OMNIROUTE_NOTE,
+            title="Before this works",
+            tone="info",
             layout=layout,
-            input_fn=input_fn,
-            help_text="Long-press the terminal to paste. It is stored only on this device.",
         )
-    except GoBack:
-        return False
-
-    api_key = api_key.strip()
-    if not api_key:
-        ui.card(console, "No key entered — skipping.", title="Skipped", tone="warn", layout=layout)
-        return False
-
-    console.print("Read back: " + mask_key(api_key), style=theme.style("muted"))
-    if not ask_yes_no(console, "Does that look right?", default=True, layout=layout, input_fn=input_fn):
-        return configure_single_provider(console, api_mgr, provider, layout, input_fn)
 
     model_choices = [Choice(value=model_id, label=model_id, description=desc) for model_id, desc in info["models"]]
     model_choices.append(Choice(value="__custom__", label="Type a model id", description="If yours isn't listed"))
@@ -224,6 +264,19 @@ def configure_single_provider(
             input_fn=input_fn,
             help_text="The OpenAI-compatible root, ending in /v1",
         )
+    elif provider == "omniroute":
+        # Imported here rather than at module scope: llm_provider pulls in
+        # `requests`, and the wizard is on the startup path.
+        from anyplace.core.llm_provider import OMNIROUTE_DEFAULT_URL
+
+        kwargs["base_url"] = ask_text(
+            console,
+            "Where is OmniRoute?",
+            default=OMNIROUTE_DEFAULT_URL,
+            layout=layout,
+            input_fn=input_fn,
+            help_text="Keep the default unless you changed OmniRoute's port.",
+        )
 
     try:
         api_mgr.set_provider(provider, api_key, model_id, **kwargs)
@@ -235,9 +288,18 @@ def configure_single_provider(
             return configure_single_provider(console, api_mgr, provider, layout, input_fn)
         return False
 
+    summary = [info["display_name"], "Model: {0}".format(model_id)]
+    if api_key:
+        summary.append("Key: {0}".format(mask_key(api_key)))
+    elif not wants_key:
+        # A bare "Key:" with nothing after it reads like something failed.
+        summary.append("Key: not needed")
+    if kwargs.get("base_url"):
+        summary.append("At: {0}".format(kwargs["base_url"]))
+
     ui.card(
         console,
-        "{0}\nModel: {1}\nKey: {2}".format(info["display_name"], model_id, mask_key(api_key)),
+        "\n".join(summary),
         title="Saved",
         tone="ok",
         layout=layout,

@@ -13,11 +13,17 @@ import requests
 
 from anyplace.config.api_manager import APIManager
 from anyplace.cli.error_handler import APIError
+from anyplace.config.providers import needs_api_key
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-provider HTTP helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+#: Where OmniRoute listens once you start it. It is a gateway you run
+#: yourself -- there is no hosted URL to point at.
+OMNIROUTE_DEFAULT_URL = "http://localhost:20128/v1"
+
 
 #: Anthropic model families that removed the sampling parameters
 #: (``temperature``, ``top_p``, ``top_k``). Sending ``temperature`` to one of
@@ -149,10 +155,11 @@ def _call_openai_compat(
     """Call any OpenAI-compatible endpoint (OpenRouter, custom, etc.)."""
     url = f"{base_url.rstrip('/')}/chat/completions"
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    # A local gateway needs no auth. Sending "Bearer " with nothing after it
+    # makes some servers reject the request outright, so omit it entirely.
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     if extra_headers:
         headers.update(extra_headers)
 
@@ -201,8 +208,8 @@ class LLMProvider:
         if not config:
             raise APIError("No LLM provider configured. Run: anyplace configure")
 
-        self.api_key = config.get("api_key", "")
-        if not self.api_key:
+        self.api_key = config.get("api_key", "") or ""
+        if not self.api_key and needs_api_key(provider_name):
             raise APIError(f"No API key for {provider_name}")
 
         self.provider = provider_name
@@ -221,6 +228,13 @@ class LLMProvider:
         elif provider_name == "openrouter":
             self.model = config.get("model", "anthropic/claude-sonnet-5")
             self.base_url = "https://openrouter.ai/api/v1"
+
+        elif provider_name == "omniroute":
+            # OmniRoute routes to whichever providers it has configured, so
+            # "auto" lets it pick rather than us guessing a model name that
+            # may not be in this user's pool.
+            self.model = config.get("model", "auto")
+            self.base_url = config.get("base_url", OMNIROUTE_DEFAULT_URL)
 
         elif provider_name == "custom":
             self.model = config.get("model", "custom-model")
@@ -252,7 +266,7 @@ class LLMProvider:
                 response_schema=response_schema,
             )
 
-        # OpenRouter or custom — both are OpenAI-compatible
+        # OpenRouter, OmniRoute and custom are all OpenAI-compatible
         extra = (
             {"HTTP-Referer": "https://github.com/rudrao2/anywhereCode",
              "X-Title": "AnywhereCode"}
@@ -509,6 +523,12 @@ class LLMProvider:
                 "anthropic/claude-sonnet-5",
                 "google/gemini-2.0-flash-exp",
                 "mistralai/mistral-large",
+            ],
+            "omniroute": [
+                "auto",
+                "openai/gpt-oss-120b",
+                "google/gemini-2.0-flash",
+                "anthropic/claude-sonnet-5",
             ],
             "custom": ["your-custom-model"],
         }
