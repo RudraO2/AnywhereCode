@@ -114,6 +114,19 @@ If you add a build tool the pipeline needs, add it to `ALLOWED_PROGRAMS` and add
 a test in `tests/test_agent_executor_safety.py` proving the ordinary invocation
 is allowed. Do not widen the content denylist to compensate.
 
+**Be honest about its scope.** The gate checks the commands the pipeline issues;
+it cannot inspect what those commands go on to run. `npm install` executes
+postinstall scripts from the registry, and `npm run build` executes a script the
+LLM wrote into `package.json`. That is inherent to setting up a generated
+project. The gate is a guardrail against the agent issuing something
+destructive, not a sandbox — don't let the README or the UI imply otherwise.
+
+`tests/test_agent_executor_safety.py` also checks the gate against the pipeline
+in the other direction: it scans the argv literals in `build_runner.py` and
+`agent_executor.py` and asserts the gate allows every one. A gate that refuses a
+command the pipeline itself issues isn't secure, it's broken — the build stops
+halfway with a message the user can do nothing about.
+
 ---
 
 ## Tests

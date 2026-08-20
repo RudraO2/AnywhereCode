@@ -24,6 +24,7 @@ from anyplace.ui.components import (
     truncate,
     wrap,
 )
+from anyplace.ui import components as components_module
 from anyplace.ui.layout import Layout
 
 WIDTHS = [30, 38, 45, 55, 62, 80, 120]
@@ -752,3 +753,72 @@ def test_count_noun_never_emits_a_parenthetical_plural():
 def test_count_noun_handles_a_negative_count_sensibly():
     # Not expected in practice, but it must not produce "-1 things".
     assert count_noun(-1, "thing") == "-1 thing"
+
+
+# ---------------------------------------------------------------------------
+# data_table: table vs. records is a readability decision, not just a width one
+# ---------------------------------------------------------------------------
+
+WIDE_CONTENT_COLS = ["Scaffold", "What it's for", "Level", "On a phone"]
+WIDE_CONTENT_ROWS = [
+    ["Android (Kotlin)", "Native Android with Jetpack Compose", "advanced", "desktop"],
+    ["Express API", "A Node REST API in TypeScript", "intermediate", "yes"],
+    ["React web app", "A fast single-page site in the browser", "beginner", "yes"],
+]
+
+
+def test_wide_content_stacks_at_sixty_rather_than_showing_stubs():
+    """
+    Four columns of long text at 60 columns technically fit -- as eleven
+    characters each, which reads "Native Andr…". Records are the honest
+    rendering.
+    """
+    out = render(lambda c: data_table(c, WIDE_CONTENT_COLS, WIDE_CONTENT_ROWS), 60)
+    assert "│" not in out
+    assert "Native Android with Jetpack Compose" in out
+
+
+def test_wide_content_tabulates_once_there_is_room():
+    out = render(lambda c: data_table(c, WIDE_CONTENT_COLS, WIDE_CONTENT_ROWS), 100)
+    assert "│" in out
+    assert "Native Android with Jetpack Compose" in out
+
+
+@pytest.mark.parametrize("width", [60, 72, 80, 90, 100, 120])
+def test_wide_content_never_overflows_whichever_layout_is_chosen(width):
+    out = render(lambda c: data_table(c, WIDE_CONTENT_COLS, WIDE_CONTENT_ROWS), width)
+    assert_fits(out, width)
+
+
+@pytest.mark.parametrize("width", [60, 72, 80, 90, 100, 120])
+def test_wide_content_keeps_every_row_at_every_width(width):
+    out = render(lambda c: data_table(c, WIDE_CONTENT_COLS, WIDE_CONTENT_ROWS), width)
+    for row in WIDE_CONTENT_ROWS:
+        assert row[0][:11] in out, "%r lost at %d columns" % (row[0], width)
+
+
+def test_short_content_still_tabulates_at_sixty():
+    """The rule must not push everything into records: narrow data still fits."""
+    cols = ["Name", "Type", "N"]
+    rows = [["alpha", "web", "3"], ["beta", "api", "7"]]
+    out = render(lambda c: data_table(c, cols, rows), 60)
+    assert "│" in out
+
+
+def test_table_stays_readable_accepts_untruncated_columns():
+    cols = ["A", "B"]
+    rows = [["short", "also short"]]
+    assert components_module._table_stays_readable(cols, rows, [5, 10]) is True
+
+
+def test_table_stays_readable_rejects_a_squeezed_column():
+    cols = ["A", "B"]
+    rows = [["short", "a much longer value than the budget allows"]]
+    assert components_module._table_stays_readable(cols, rows, [5, 8]) is False
+
+
+def test_table_stays_readable_allows_a_generously_truncated_column():
+    """Truncation is fine as long as what survives is still worth reading."""
+    cols = ["A", "B"]
+    rows = [["short", "a much longer value than the budget allows"]]
+    assert components_module._table_stays_readable(cols, rows, [5, 24]) is True

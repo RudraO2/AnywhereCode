@@ -110,15 +110,19 @@ first-class input:
 |---|---|
 | **< 40 cols** | No boxes, no bars, no wasted column. Stacked records, short labels. |
 | **40–59 cols** | Coloured edge bars instead of borders, one item per line. |
-| **60–89 cols** | Tables come back, descriptions sit beside labels. |
+| **60–89 cols** | Tables return when the columns fit; otherwise records, in full. |
 | **90+ cols** | The full desktop layout. |
 
 Concretely:
 
 - **Nothing ever wraps into mush.** Every component is width-tested from 30 to
   120 columns; a rendered line is never wider than the terminal.
-- **Tables become records.** A 4-column table at 34 characters is unreadable, so
-  below 60 columns it becomes stacked `Label: value` lines instead.
+- **Tables become records when a table would lie.** The choice isn't width
+  alone: four columns of long text at 60 columns technically *fit*, as eleven
+  characters each — `Native Andr…`, `A Python RE…` — which tells you nothing. A
+  table is drawn only when every column that has to be trimmed still has enough
+  room to read; otherwise the same data is stacked as `Label: value` records,
+  in full.
 - **Emoji have ASCII fallbacks.** Many Termux fonts render emoji as tofu, and a
   double-width glyph corrupts every layout calculation downstream. Set
   `ANYWHERE_THEME=mono` and you get `[ok]` instead of `✅`.
@@ -128,8 +132,16 @@ Concretely:
 - **Options match on prefixes.** "we" picks "Web app". You don't have to hunt
   for the number.
 
+- **`--help` fits too.** Click lays options and commands out as a two-column
+  table with a fixed name column; below roughly 30 columns the descriptions run
+  off the edge, on the one command a stuck user reaches for. Both lists stack
+  instead, and the commands are grouped by task rather than listed
+  alphabetically.
+
 Environment variables: `ANYWHERE_WIDTH` forces a width, `ANYWHERE_THEME` picks
 `default` / `mono` / `highcontrast`, and `NO_COLOR` is respected.
+`ANYWHERE_WIDTH` reaches the renderer, not just the layout logic — so pinning it
+genuinely changes what is drawn.
 
 ---
 
@@ -211,6 +223,17 @@ allowed tool, like `npm run clean -- "rm -rf /"`.
 
 Anything it cannot fully understand — a malformed argv, an unrecognised
 program — is refused rather than guessed at.
+
+**What this does not protect against.** The gate checks the commands *it*
+issues. It cannot inspect what those commands then run: `npm install` executes
+`postinstall` scripts from the dependency tree, and `npm run build` executes a
+script the AI wrote into `package.json`. Setting up a generated project means
+running that project's code, and no allowlist can change that.
+
+So the gate is a guardrail against the agent being talked into something
+destructive — not a sandbox. Treat a generated project the way you'd treat any
+repository you just cloned: it is code you haven't read yet. If that matters for
+what you're building, run it somewhere disposable.
 
 By default you approve each step before it runs. Your API key is stored in
 `~/.config/anyplace/config.yaml` with `0600` permissions and never leaves the

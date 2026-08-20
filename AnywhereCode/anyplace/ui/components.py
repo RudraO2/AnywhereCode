@@ -667,6 +667,35 @@ def _column_budgets(
     return budgets
 
 
+#: A table column narrower than this shows stubs rather than information:
+#: "Native Andr…", "A Python RE…". Below it, stacked records read better even
+#: though the table would technically fit.
+MIN_TABLE_COL = 12
+
+
+def _table_stays_readable(
+    cols: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    budgets: Sequence[int],
+) -> bool:
+    """Is a real table still worth drawing at these column budgets?
+
+    Width alone is the wrong question. Four columns of long text at 60 columns
+    "fit" -- every cell is truncated to eleven characters and the table tells
+    the reader nothing. A column is fine if it was never squeezed, or if what
+    is left is still wide enough to read.
+    """
+    for i, budget in enumerate(budgets):
+        natural = cell_len(str(cols[i])) if i < len(cols) else 0
+        for row in rows:
+            if i < len(row):
+                cell = "" if row[i] is None else str(row[i])
+                natural = max(natural, cell_len(cell))
+        if budget < natural and budget < MIN_TABLE_COL:
+            return False
+    return True
+
+
 def data_table(
     console: Console,
     columns: Sequence[str],
@@ -702,11 +731,12 @@ def data_table(
         _line(console, Text(pad + truncate("(no rows)", inner), style=muted), width)
         return
 
-    if not lay.narrow:
-        ncols = len(cols)
+    ncols = len(cols)
+    overhead = (3 * ncols) + 1  # one padded cell per column + n+1 borders
+    budgets = _column_budgets(cols, rows, max(ncols * 3, inner - overhead), ncols)
+
+    if not lay.narrow and _table_stays_readable(cols, rows, budgets):
         use_box = box.ROUNDED if lay.unicode else box.ASCII
-        overhead = (3 * ncols) + 1  # one padded cell per column + n+1 borders
-        budgets = _column_budgets(cols, rows, max(ncols * 3, inner - overhead), ncols)
         table = Table(
             box=use_box,
             width=min(inner, overhead + sum(budgets)),

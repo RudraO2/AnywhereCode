@@ -335,3 +335,87 @@ def test_interpreter_payload_variants_are_blocked(cmd):
 )
 def test_ordinary_commands_are_not_refused(cmd):
     assert_allowed(cmd)
+
+
+# ---------------------------------------------------------------------------
+# The gate and the pipeline must agree
+#
+# A gate that refuses a command the pipeline itself issues is not "secure", it
+# is broken: the build stops halfway with a message the user cannot act on.
+# This walks the argv literals in the pipeline modules and checks each one.
+# ---------------------------------------------------------------------------
+
+
+import pathlib
+import re
+
+import anyplace
+
+
+PIPELINE_MODULES = ("core/build_runner.py", "core/agent_executor.py")
+
+ARGV_LITERAL = re.compile(r'\[\s*((?:"[^"]*"\s*,\s*)*"[^"]*")\s*\]')
+PROGRAM_LIKE = re.compile(r"[a-z0-9_.-]+")
+
+
+def pipeline_commands():
+    """Every literal argv list written in the pipeline modules."""
+    package = pathlib.Path(anyplace.__file__).resolve().parent
+    found = set()
+    for relative in PIPELINE_MODULES:
+        source = (package / relative).read_text(encoding="utf-8")
+        for match in ARGV_LITERAL.finditer(source):
+            parts = re.findall(r'"([^"]*)"', match.group(1))
+            if len(parts) > 1 and PROGRAM_LIKE.fullmatch(parts[0]):
+                found.add(tuple(parts))
+    return sorted(found)
+
+
+def test_the_scan_finds_the_pipeline_commands():
+    commands = pipeline_commands()
+    assert len(commands) >= 8, "argv scan found almost nothing -- has the shape changed?"
+    assert ("npm", "install", "--legacy-peer-deps") in commands
+
+
+@pytest.mark.parametrize("cmd", pipeline_commands(), ids=lambda c: " ".join(c)[:40])
+def test_the_pipeline_never_issues_a_command_the_gate_refuses(cmd):
+    assert_allowed(list(cmd))
+
+
+def test_every_allowed_program_is_a_recognisable_build_tool():
+    """Guards against a typo or a stray entry widening the allowlist."""
+    from anyplace.core.agent_executor import ALLOWED_PROGRAMS
+
+    for program in ALLOWED_PROGRAMS:
+        assert program == program.lower(), "%r is not lowercase" % program
+        assert re.fullmatch(r"[a-z0-9][a-z0-9._-]*", program), "odd entry %r" % program
+
+
+def test_no_shell_is_on_the_allowlist():
+    """The whole design rests on this: a shell would re-open every hole."""
+    from anyplace.core.agent_executor import ALLOWED_PROGRAMS
+
+    for shell in ("sh", "bash", "zsh", "ksh", "dash", "fish", "csh", "tcsh", "busybox"):
+        assert shell not in ALLOWED_PROGRAMS
+
+
+def test_no_privilege_escalation_tool_is_on_the_allowlist():
+    from anyplace.core.agent_executor import ALLOWED_PROGRAMS
+
+    for tool in ("sudo", "su", "doas", "pkexec", "runuser"):
+        assert tool not in ALLOWED_PROGRAMS
+
+
+def test_no_file_deletion_tool_is_on_the_allowlist():
+    from anyplace.core.agent_executor import ALLOWED_PROGRAMS
+
+    for tool in ("rm", "rmdir", "shred", "wipe", "unlink", "find", "xargs"):
+        assert tool not in ALLOWED_PROGRAMS
+
+
+def test_no_network_fetch_tool_is_on_the_allowlist():
+    """Package managers fetch; a raw fetcher piped anywhere is not needed."""
+    from anyplace.core.agent_executor import ALLOWED_PROGRAMS
+
+    for tool in ("curl", "wget", "nc", "ncat", "ssh", "scp", "ftp"):
+        assert tool not in ALLOWED_PROGRAMS

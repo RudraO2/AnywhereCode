@@ -26,15 +26,28 @@ from anyplace.ui.layout import Layout
 from anyplace.ui.theme import get_theme
 
 
-def _console():
+def _console(layout: Optional[Layout] = None):
+    """
+    A console that renders at the width the app has decided on.
+
+    Rich detects its own width, which is *not* the same number: ANYWHERE_WIDTH
+    (documented for users whose Termux font reports nonsense) is invisible to
+    it. Leaving them to disagree meant a 60-column layout being padded out to
+    rich's 80, so tables ran off the side of the screen -- for exactly the
+    users who set the variable to stop that happening.
+
+    Layout is the single source of truth; the console follows it.
+    """
     from rich.console import Console
 
-    return Console()
+    layout = layout or Layout.detect()
+    return Console(width=layout.width, no_color=not layout.color)
 
 
-def _ctx():
-    """Console + layout, resolved once per command."""
-    return _console(), Layout.detect()
+def _ctx(width: Optional[int] = None):
+    """Console + layout, resolved once per command, always in agreement."""
+    layout = Layout.detect(width=width)
+    return _console(layout), layout
 
 
 dir_option = click.option(
@@ -59,8 +72,104 @@ COMMAND_GROUPS = (
 )
 
 
-class AnywhereGroup(click.Group):
+def _render_sections(sections) -> str:
+    """
+    Render `(heading, [(name, description), ...])` pairs as help text.
+
+    Click's built-in definition list is a two-column table: on a phone the
+    name column eats most of the width and every description is truncated to
+    "Build the project...", or -- for options, whose names are longer -- simply
+    overflows the screen. Below a usable width we stack instead: name on its
+    own line, description wrapped beneath.
+
+    Rendered through rich but returned as text, so callers can hand it to
+    click's formatter and keep it in the right place relative to the usage
+    block click writes itself.
+    """
+    import io
+
+    from rich.console import Console
+
+    stdout, layout = _ctx()
+    theme = get_theme()
+    from anyplace.ui import components as ui
+
+    sections = [(h, rows) for h, rows in sections if rows]
+    if not sections:
+        return ""
+
+    buffer = Console(
+        file=io.StringIO(),
+        width=layout.width,
+        force_terminal=stdout.is_terminal,
+        no_color=not layout.color,
+        highlight=False,
+        soft_wrap=True,
+    )
+
+    # Two columns only when the widest name still leaves room to read.
+    widest = max(len(name) for _, rows in sections for name, _ in rows)
+    stacked = layout.narrow or (layout.body_width - widest - 4) < 24
+
+    for heading, rows in sections:
+        buffer.print()
+        buffer.print(heading + ":", style=theme.style("accent"))
+        for name, help_text in rows:
+            if stacked:
+                buffer.print("  " + name, style=theme.style("value"))
+                if help_text:
+                    buffer.print(
+                        ui.wrap(help_text, max(12, layout.body_width - 4), indent="    "),
+                        style=theme.style("muted"),
+                    )
+            else:
+                pad = " " * (widest + 4)
+                body = ui.wrap(
+                    help_text, max(12, layout.body_width - widest - 4), indent=pad
+                ).lstrip()
+                buffer.print(
+                    "  " + name + " " * (widest - len(name) + 2) + body,
+                    style=theme.style("muted"),
+                )
+
+    return buffer.file.getvalue().rstrip("\n")
+
+
+class NarrowHelp:
+    """Mixin: render the options list so it survives a narrow screen.
+
+    Click reserves a fixed first column for option names like
+    ``--width INTEGER``. Below about 30 columns the help text beside it no
+    longer fits and simply runs off the edge -- on the one command a stuck
+    user is most likely to reach for.
+    """
+
+    def format_options(self, ctx, formatter):
+        records = []
+        for param in self.get_params(ctx):
+            record = param.get_help_record(ctx)
+            if record is not None:
+                records.append(record)
+
+        text = _render_sections([("Options", records)])
+        if text:
+            formatter.write(text)
+
+        # Groups list their subcommands after the options, as click does.
+        commands = getattr(self, "format_commands", None)
+        if commands is not None:
+            commands(ctx, formatter)
+
+
+class AnywhereCommand(NarrowHelp, click.Command):
+    """A subcommand whose --help fits the screen."""
+
+
+class AnywhereGroup(NarrowHelp, click.Group):
     """A group whose bare invocation opens the interactive shell."""
+
+    #: Subcommands get the same narrow-screen help treatment.
+    command_class = AnywhereCommand
 
     def resolve_command(self, ctx, args):
         return super().resolve_command(ctx, args)
@@ -110,56 +219,9 @@ class AnywhereGroup(click.Group):
         formatter, so it keeps its colours *and* stays in the right place
         relative to the usage and options blocks click writes itself.
         """
-        sections = self.grouped_commands(ctx)
-        if not sections:
-            return
-        formatter.write(self._render_commands(sections))
-
-    def _render_commands(self, sections) -> str:
-        """The command list as a block of (possibly styled) text."""
-        import io
-
-        from rich.console import Console
-
-        stdout, layout = _ctx()
-        theme = get_theme()
-        from anyplace.ui import components as ui
-
-        buffer = Console(
-            file=io.StringIO(),
-            width=layout.width,
-            force_terminal=stdout.is_terminal,
-            no_color=not layout.color,
-            highlight=False,
-            soft_wrap=True,
-        )
-
-        # Two-column only when the widest name still leaves room to read.
-        widest = max(len(name) for _, rows in sections for name, _ in rows)
-        stacked = layout.narrow or (layout.body_width - widest - 4) < 24
-
-        for heading, rows in sections:
-            buffer.print()
-            buffer.print(heading + ":", style=theme.style("accent"))
-            for name, help_text in rows:
-                if stacked:
-                    buffer.print("  " + name, style=theme.style("value"))
-                    if help_text:
-                        buffer.print(
-                            ui.wrap(help_text, max(12, layout.body_width - 4), indent="    "),
-                            style=theme.style("muted"),
-                        )
-                else:
-                    pad = " " * (widest + 4)
-                    body = ui.wrap(
-                        help_text, max(12, layout.body_width - widest - 4), indent=pad
-                    ).lstrip()
-                    buffer.print(
-                        "  " + name + " " * (widest - len(name) + 2) + body,
-                        style=theme.style("muted"),
-                    )
-
-        return buffer.file.getvalue().rstrip("\n")
+        text = _render_sections(self.grouped_commands(ctx))
+        if text:
+            formatter.write(text)
 
     def format_help(self, ctx, formatter):
         console, layout = _ctx()
