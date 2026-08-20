@@ -36,10 +36,9 @@ PROVIDERS: Dict[str, Dict] = {
         "docs_url": "https://console.anthropic.com",
         "key_format": "sk-ant-…",
         "models": [
-            ("claude-sonnet-5", "Recommended — fast and strong"),
-            ("claude-opus-5", "Most capable, pricier"),
-            ("claude-haiku-4-5-20251001", "Cheapest, good for small jobs"),
-            ("claude-3-5-sonnet-20241022", "Legacy 3.5 Sonnet"),
+            ("claude-opus-5", "Recommended — most capable"),
+            ("claude-sonnet-5", "Faster and cheaper"),
+            ("claude-haiku-4-5", "Cheapest, good for small jobs"),
         ],
     },
     "openrouter": {

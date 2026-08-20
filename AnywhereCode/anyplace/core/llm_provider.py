@@ -19,6 +19,29 @@ from anyplace.cli.error_handler import APIError
 # Per-provider HTTP helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: Anthropic model families that removed the sampling parameters
+#: (``temperature``, ``top_p``, ``top_k``). Sending ``temperature`` to one of
+#: these is a 400 from the API, not a warning that can be ignored -- so the
+#: parameter has to be left out of the request body entirely.
+NO_SAMPLING_PARAMS = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+)
+
+
+def supports_sampling(model: str) -> bool:
+    """Does this Anthropic model still accept ``temperature``?"""
+    name = (model or "").strip().lower()
+    # OpenRouter-style "anthropic/claude-..." ids name the same models.
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    return not name.startswith(NO_SAMPLING_PARAMS)
+
+
 def _call_claude(
     api_key: str,
     model: str,
@@ -43,9 +66,10 @@ def _call_claude(
     body: Dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         "messages": user_messages,
     }
+    if supports_sampling(model):
+        body["temperature"] = temperature
     if sys_prompt:
         body["system"] = sys_prompt
 
@@ -185,7 +209,7 @@ class LLMProvider:
         self.base_url: Optional[str] = None
 
         if provider_name == "claude":
-            self.model = config.get("model", "claude-3-5-sonnet-20241022")
+            self.model = config.get("model", "claude-opus-5")
 
         elif provider_name == "gemini":
             model_name = config.get("model", "gemini-2.0-flash")
@@ -195,7 +219,7 @@ class LLMProvider:
             self.model = model_name
 
         elif provider_name == "openrouter":
-            self.model = config.get("model", "anthropic/claude-3.5-sonnet")
+            self.model = config.get("model", "anthropic/claude-sonnet-5")
             self.base_url = "https://openrouter.ai/api/v1"
 
         elif provider_name == "custom":
@@ -472,9 +496,9 @@ class LLMProvider:
         """Return known model IDs for the active provider."""
         models = {
             "claude": [
-                "claude-3-5-sonnet-20241022",
-                "claude-3-5-haiku-20241022",
-                "claude-3-opus-20250219",
+                "claude-opus-5",
+                "claude-sonnet-5",
+                "claude-haiku-4-5",
             ],
             "gemini": [
                 "gemini-2.0-flash",
@@ -482,7 +506,7 @@ class LLMProvider:
                 "gemini-1.5-pro",
             ],
             "openrouter": [
-                "anthropic/claude-3.5-sonnet",
+                "anthropic/claude-sonnet-5",
                 "google/gemini-2.0-flash-exp",
                 "mistralai/mistral-large",
             ],

@@ -162,7 +162,7 @@ if __name__ == "__main__":
         mgr.set_provider(
             "claude",
             "sk-ant-test-key-123",
-            "claude-3-5-sonnet"
+            "claude-opus-5"
         )
         print("Provider configured successfully")
         print(f"Providers: {list(mgr.list_providers().keys())}")

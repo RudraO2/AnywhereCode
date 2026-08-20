@@ -217,9 +217,9 @@ def test_extract_json_from_response_empty_object_inside_prose(parser):
 
 
 def test_setup_provider_uses_default_model_per_provider():
-    assert make_provider("claude").model == "claude-3-5-sonnet-20241022"
+    assert make_provider("claude").model == "claude-opus-5"
     assert make_provider("gemini", api_key="AIzaKey").model == "gemini-2.0-flash"
-    assert make_provider("openrouter", api_key="sk-or-x").model == "anthropic/claude-3.5-sonnet"
+    assert make_provider("openrouter", api_key="sk-or-x").model == "anthropic/claude-sonnet-5"
 
 
 def test_setup_provider_strips_google_prefix_from_gemini_model():
@@ -268,7 +268,7 @@ def test_setup_provider_raises_for_unknown_provider():
 
 
 def test_list_models_returns_known_ids_for_active_provider():
-    assert "claude-3-5-sonnet-20241022" in make_provider("claude").list_models()
+    assert "claude-opus-5" in make_provider("claude").list_models()
     assert make_provider("gemini", api_key="AIzaKey").list_models()[0].startswith("gemini")
 
 
@@ -601,12 +601,86 @@ def test_generate_json_unwraps_gemini_list_wrapped_object(monkeypatch):
 
 
 def test_generate_json_uses_lower_temperature_than_generate_text(monkeypatch):
+    # Checked on a model that still accepts sampling parameters -- the current
+    # default does not, and omits `temperature` entirely. See the sampling
+    # tests below.
     post = fake_requests_post(claude_payload('{"a": 1}'))
     monkeypatch.setattr(lp.requests, "post", post)
 
-    make_provider("claude").generate_json("hi")
+    make_provider("claude", model="claude-sonnet-4-6").generate_json("hi")
 
     assert post.last["json"]["temperature"] == 0.3
+
+
+# ---------------------------------------------------------------------------
+# Sampling parameters
+#
+# temperature/top_p/top_k were removed on the Claude 5 family and on Opus
+# 4.7/4.8: sending one is a 400, not a warning. The request body has to leave
+# the parameter out rather than pass a default through.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "anthropic/claude-opus-5",
+        "CLAUDE-OPUS-5",
+    ],
+)
+def test_models_without_sampling_are_recognised(model):
+    assert lp.supports_sampling(model) is False
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-3-5-sonnet-20241022",
+        "some-other-model",
+        "",
+    ],
+)
+def test_models_that_still_accept_sampling_are_recognised(model):
+    assert lp.supports_sampling(model) is True
+
+
+def test_temperature_is_omitted_for_the_default_model(monkeypatch):
+    post = fake_requests_post(claude_payload("hi"))
+    monkeypatch.setattr(lp.requests, "post", post)
+
+    make_provider("claude").generate_text("hello")
+
+    assert "temperature" not in post.last["json"]
+    assert post.last["json"]["model"] == "claude-opus-5"
+
+
+def test_temperature_is_sent_for_a_model_that_accepts_it(monkeypatch):
+    post = fake_requests_post(claude_payload("hi"))
+    monkeypatch.setattr(lp.requests, "post", post)
+
+    make_provider("claude", model="claude-sonnet-4-6").generate_text("hello", temperature=0.9)
+
+    assert post.last["json"]["temperature"] == 0.9
+
+
+def test_the_rest_of_the_body_is_unchanged_when_temperature_is_dropped(monkeypatch):
+    post = fake_requests_post(claude_payload("hi"))
+    monkeypatch.setattr(lp.requests, "post", post)
+
+    make_provider("claude").generate_text("hello", system="be brief", max_tokens=512)
+
+    body = post.last["json"]
+    assert body["max_tokens"] == 512
+    assert body["system"] == "be brief"
+    assert body["messages"][-1]["content"] == "hello"
 
 
 # ---------------------------------------------------------------------------

@@ -246,7 +246,7 @@ device except to reach the provider you chose.
 | Provider | Key format | Notes |
 |---|---|---|
 | Google Gemini | `AIza…` | Free tier — start here |
-| Claude | `sk-ant-…` | Best code quality |
+| Claude | `sk-ant-…` | Best code quality; defaults to Claude Opus 5 |
 | OpenRouter | `sk-or-…` | One key, 100+ models |
 | Custom | anything | Any OpenAI-compatible endpoint, including local |
 
