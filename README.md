@@ -1,11 +1,16 @@
 # Anywhere Code
 
-**Build and ship real projects from your phone.**
+**An AI coding CLI for people whose main computer is a phone.**
 
-Anywhere Code is an AI coding CLI designed for a 40-column terminal and one
-thumb. It runs in [Termux](https://termux.dev) on Android, on a laptop, or
-anywhere else Python runs. You answer a few questions, it plans the project,
-writes every file, installs the dependencies, builds it, and starts it.
+Not a phone *client* for a laptop somewhere else. The whole thing runs on the
+device in your hand, in [Termux](https://termux.dev) on Android — or on a
+laptop, or anywhere else Python runs.
+
+You type `anywhere`. It asks what you want to build, in plain questions with a
+default on every one. It recommends a stack and tells you the trade-off out
+loud. It shows you every file it intends to write before it writes one. Then it
+writes them, installs the dependencies, builds, generates CI and Docker config,
+commits as it goes, and starts a dev server on localhost. You approve each step.
 
 No laptop. No IDE. No copy-pasting from a chat window.
 
@@ -39,6 +44,42 @@ What now?
 7. Quit
 1-7 pick · q quit
 ```
+
+---
+
+## Why not just run one of the other AI coding CLIs?
+
+You can. Claude Code, Aider, Gemini CLI and the rest all *execute* fine in
+Termux. Two things go wrong once they're running.
+
+**Their interface assumes a screen you don't have.** They're built for 80+
+columns and a hardware keyboard; at 34 columns their tables wrap into mush and
+their help text runs off the edge. Anywhere Code treats terminal width as a
+first-class input — every screen has a narrow layout that stacks instead of
+truncating, and the test suite renders real commands at eleven widths and fails
+if a single line is too long for the terminal.
+[How that works ↓](#built-for-a-small-screen)
+
+**They assume you already have a working setup and know what to type.** They
+expect a repo, a toolchain, and a user fluent in `npm run build`. Anywhere Code
+assumes none of it. The entry point is a question, not a prompt — with a
+default on every one, because typing on a phone is expensive. Project ideas are
+called "Habit tracker", not `mobile-expo-rn`. And `anywhere doctor` knows the
+specific ways a Termux setup breaks — storage permission never granted,
+`~/.local/bin` missing from `PATH` — and prints the exact command that fixes
+each one.
+
+## What it won't do
+
+Some things genuinely cannot be built on a phone, and the tool says so rather
+than letting you find out after twenty minutes of downloading. Next.js, Expo
+and native Android are all marked "build on desktop or CI" in the scaffold
+list: you write them here and build them elsewhere. React, Express and FastAPI
+projects build and run on-device.
+
+The setup pipeline also runs real commands on your device. There are guardrails
+around that, and [a section below](#safety) about exactly what they do and do
+not protect you from.
 
 ---
 

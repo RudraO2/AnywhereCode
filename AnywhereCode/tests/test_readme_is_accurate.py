@@ -215,3 +215,102 @@ def test_commands_the_readme_says_are_refused_really_are():
         ["sudo", "apt", "install", "x"],
     ):
         assert is_command_safe(cmd)[0] is False, "%r should be refused" % (cmd,)
+
+
+# ---------------------------------------------------------------------------
+# The opening
+#
+# The first screen of the README is the positioning: who this is for, and why
+# the alternatives don't fit. Its factual claims are as checkable as the
+# scaffold table's, and they rot the same way.
+# ---------------------------------------------------------------------------
+
+
+def opening(readme):
+    """Everything above the Install section."""
+    return readme[: readme.index("## Install")]
+
+
+def test_the_opening_says_who_it_is_for(readme):
+    assert "main computer is a phone" in opening(readme)
+
+
+def test_the_opening_names_a_real_recipe_as_the_friendly_example(readme):
+    """It contrasts a recipe title with a scaffold id -- both must be real."""
+    from anyplace.core.recipes import RECIPES
+
+    head = opening(readme)
+    titles = set(r.title for r in RECIPES)
+    quoted = set(re.findall(r'"([A-Z][a-z]+(?: [a-z]+)*)"', head))
+    assert quoted & titles, (
+        "the opening should name a real recipe; found %s" % sorted(quoted)
+    )
+
+
+def test_the_opening_contrasts_it_with_a_real_template_id(readme):
+    assert "mobile-expo-rn" in opening(readme)
+    assert "mobile-expo-rn" in template_metadata()
+
+
+def test_the_width_count_in_the_opening_matches_the_suite(readme):
+    """'eleven widths' has to be however many the suite actually runs."""
+    from tests.test_rendered_output_fits import WIDTHS
+
+    words = {
+        9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
+    }
+    word = words.get(len(WIDTHS))
+    assert word, "add %d to the word map" % len(WIDTHS)
+    assert "%s widths" % word in opening(readme), (
+        "opening should say %r widths; the suite runs %d" % (word, len(WIDTHS))
+    )
+
+
+def test_scaffolds_the_opening_calls_on_device_really_are(readme):
+    head = opening(readme)
+    metadata = template_metadata()
+    by_display = dict((d["display_name"], d) for d in metadata.values())
+
+    # "React, Express and FastAPI projects build and run on-device."
+    for display in ("React web app", "Express API", "FastAPI API"):
+        assert by_display[display]["mobile_friendly"] is True, (
+            "%s is described as on-device but is not marked mobile_friendly" % display
+        )
+    assert "on-device" in head
+
+
+def test_scaffolds_the_opening_defers_to_ci_really_are_heavy(readme):
+    metadata = template_metadata()
+    by_display = dict((d["display_name"], d) for d in metadata.values())
+
+    # "Next.js, Expo and native Android are all marked build on desktop or CI"
+    for display in ("Next.js app", "Expo mobile app", "Android (Kotlin)"):
+        assert by_display[display]["mobile_friendly"] is False, (
+            "%s is described as desktop/CI-only but is marked mobile_friendly" % display
+        )
+
+
+def test_the_opening_links_resolve_to_real_headings(readme):
+    """A dead anchor in the first screen is a bad first impression."""
+    headings = set()
+    for line in readme.splitlines():
+        if line.startswith("## "):
+            slug = line[3:].strip().lower()
+            slug = re.sub(r"[^\w\s-]", "", slug).replace(" ", "-")
+            headings.add(slug)
+
+    for anchor in re.findall(r"\]\(#([\w-]+)\)", opening(readme)):
+        assert anchor in headings, "opening links to #%s, which is not a heading" % anchor
+
+
+def test_the_opening_does_not_repeat_the_small_screen_section(readme):
+    """
+    The opening pitches; the section explains. When the opening started
+    re-listing the mechanics (tofu emoji, stacked tables, defaults) the two
+    drifted apart and disagreed on how many widths were tested.
+    """
+    head = opening(readme)
+    for mechanic in ("tofu", "ANYWHERE_THEME", "Label: value"):
+        assert mechanic not in head, (
+            "%r belongs in the small-screen section, not the opening" % mechanic
+        )
