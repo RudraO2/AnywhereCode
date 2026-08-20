@@ -48,7 +48,9 @@ def render_report(console, report: DoctorReport, layout: Optional[Layout] = None
     elif report.healthy:
         ui.card(
             console,
-            "{0} thing(s) worth a look, but nothing blocking.".format(counts.get(WARN, 0)),
+            "{0} worth a look, but nothing blocking.".format(
+                ui.count_noun(counts.get(WARN, 0), "thing")
+            ),
             title="Mostly fine",
             tone="warn",
             layout=layout,
@@ -56,7 +58,10 @@ def render_report(console, report: DoctorReport, layout: Optional[Layout] = None
     else:
         ui.card(
             console,
-            "{0} thing(s) need fixing before this will work properly.".format(counts.get(FAIL, 0)),
+            "{0} {1} fixing before this will work properly.".format(
+                ui.count_noun(counts.get(FAIL, 0), "thing"),
+                "needs" if counts.get(FAIL, 0) == 1 else "need",
+            ),
             title="Needs attention",
             tone="err",
             layout=layout,

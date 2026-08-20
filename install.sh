@@ -135,11 +135,31 @@ if $IS_TERMUX && [ ! -d "$HOME/storage" ]; then
 fi
 
 # ── 8. Check it actually works ───────────────────────────────────────
+#
+# Deliberately ignores the "no AI provider" check: nobody has configured one
+# yet, and the next thing this script does is offer to. Warning about it here
+# would make every successful first install look half-broken.
 printf "\n"
-if "$BIN_DIR/anywhere" doctor >/dev/null 2>&1; then
+BROKEN="$(ANYWHERE_APP_DIR="$APP_DIR" "$PYTHON" - <<'PROBE' 2>/dev/null || true
+import os
+import sys
+
+sys.path.insert(0, os.environ["ANYWHERE_APP_DIR"])
+from anyplace.core.doctor import FAIL, run_all
+
+report = run_all()
+print(
+    ", ".join(
+        c.title for c in report.checks if c.status == FAIL and c.id != "providers"
+    )
+)
+PROBE
+)"
+if [ -z "$BROKEN" ]; then
     ok "Everything checks out"
 else
-    warn "Installed, but the setup check found something — run: anywhere doctor"
+    warn "Installed, but these need attention: $BROKEN"
+    warn "Run: anywhere doctor"
 fi
 
 printf "\n${G}${B}  Done.${N}\n\n"

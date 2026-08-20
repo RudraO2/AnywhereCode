@@ -73,6 +73,16 @@ def _cut(text: str, width: int) -> str:
     return "".join(out)
 
 
+def count_noun(count: int, singular: str, plural: Optional[str] = None) -> str:
+    """``1 thing`` / ``2 things`` -- never ``1 thing(s)``.
+
+    A parenthetical plural reads as unfinished, and on a 40-column screen the
+    three characters it costs are three characters of something useful.
+    """
+    word = singular if abs(count) == 1 else (plural or singular + "s")
+    return "{0} {1}".format(count, word)
+
+
 def truncate(text: str, width: int) -> str:
     """Truncate to ``width`` display cells, appending ``…`` (or ``...``).
 

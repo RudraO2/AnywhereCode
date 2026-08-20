@@ -22,95 +22,130 @@ Typical use::
 
 from __future__ import annotations
 
-from anyplace.ui.components import (
-    MenuItem,
-    banner,
-    card,
-    data_table,
-    hint_bar,
-    kv,
-    menu,
-    progress_line,
-    rule,
-    steps,
-    truncate,
-    wrap,
-)
-from anyplace.ui.layout import (
-    LG,
-    MD,
-    SM,
-    XS,
-    Layout,
-    breakpoint_for,
-    content_width,
-    is_narrow,
-    is_termux,
-    supports_color,
-    supports_emoji,
-    supports_unicode,
-    terminal_size,
-)
-from anyplace.ui.prompts import (
-    Choice,
-    GoBack,
-    InputFn,
-    PromptAbort,
-    QuitApp,
-    ask_choice,
-    ask_multi,
-    ask_text,
-    ask_yes_no,
-    confirm_danger,
-    pause,
-    scripted_input,
-)
-from anyplace.ui.theme import ICONS, THEMES, Theme, get_theme
+from typing import TYPE_CHECKING
 
-__all__ = [
-    # layout
-    "XS",
-    "SM",
-    "MD",
-    "LG",
-    "Layout",
-    "terminal_size",
-    "breakpoint_for",
-    "is_narrow",
-    "is_termux",
-    "supports_unicode",
-    "supports_emoji",
-    "supports_color",
-    "content_width",
+# Imports are lazy (PEP 562) so the promise at the top of this docstring --
+# three layers, importable independently -- is actually true. `layout` is pure
+# stdlib, and a pure-logic module that only needs the terminal width should not
+# pay for `rich` to be imported. `anyplace.core.doctor` relies on this.
+#
+# Attribute access on the package still works exactly as before:
+#     from anyplace import ui
+#     ui.card(console, "hello")
+
+_EXPORTS = {
+    # layout (pure stdlib)
+    "XS": "anyplace.ui.layout",
+    "SM": "anyplace.ui.layout",
+    "MD": "anyplace.ui.layout",
+    "LG": "anyplace.ui.layout",
+    "Layout": "anyplace.ui.layout",
+    "terminal_size": "anyplace.ui.layout",
+    "breakpoint_for": "anyplace.ui.layout",
+    "is_narrow": "anyplace.ui.layout",
+    "is_termux": "anyplace.ui.layout",
+    "supports_unicode": "anyplace.ui.layout",
+    "supports_emoji": "anyplace.ui.layout",
+    "supports_color": "anyplace.ui.layout",
+    "content_width": "anyplace.ui.layout",
     # theme
-    "ICONS",
-    "THEMES",
-    "Theme",
-    "get_theme",
-    # components
-    "MenuItem",
-    "banner",
-    "card",
-    "menu",
-    "kv",
-    "data_table",
-    "steps",
-    "hint_bar",
-    "rule",
-    "progress_line",
-    "wrap",
-    "truncate",
+    "ICONS": "anyplace.ui.theme",
+    "THEMES": "anyplace.ui.theme",
+    "Theme": "anyplace.ui.theme",
+    "get_theme": "anyplace.ui.theme",
+    # components (pulls in rich)
+    "MenuItem": "anyplace.ui.components",
+    "banner": "anyplace.ui.components",
+    "card": "anyplace.ui.components",
+    "count_noun": "anyplace.ui.components",
+    "menu": "anyplace.ui.components",
+    "kv": "anyplace.ui.components",
+    "data_table": "anyplace.ui.components",
+    "steps": "anyplace.ui.components",
+    "hint_bar": "anyplace.ui.components",
+    "rule": "anyplace.ui.components",
+    "progress_line": "anyplace.ui.components",
+    "wrap": "anyplace.ui.components",
+    "truncate": "anyplace.ui.components",
     # prompts
-    "PromptAbort",
-    "GoBack",
-    "QuitApp",
-    "Choice",
-    "InputFn",
-    "scripted_input",
-    "ask_choice",
-    "ask_text",
-    "ask_yes_no",
-    "ask_multi",
-    "confirm_danger",
-    "pause",
-]
+    "PromptAbort": "anyplace.ui.prompts",
+    "GoBack": "anyplace.ui.prompts",
+    "QuitApp": "anyplace.ui.prompts",
+    "Choice": "anyplace.ui.prompts",
+    "InputFn": "anyplace.ui.prompts",
+    "scripted_input": "anyplace.ui.prompts",
+    "ask_choice": "anyplace.ui.prompts",
+    "ask_text": "anyplace.ui.prompts",
+    "ask_yes_no": "anyplace.ui.prompts",
+    "ask_multi": "anyplace.ui.prompts",
+    "confirm_danger": "anyplace.ui.prompts",
+    "pause": "anyplace.ui.prompts",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str):
+    """Resolve a re-exported name on first use (PEP 562)."""
+    try:
+        module_name = _EXPORTS[name]
+    except KeyError:
+        raise AttributeError("module %r has no attribute %r" % (__name__, name)) from None
+
+    import importlib
+
+    value = getattr(importlib.import_module(module_name), name)
+    globals()[name] = value  # cache, so this runs once per name
+    return value
+
+
+def __dir__():
+    return sorted(set(list(globals()) + __all__))
+
+
+if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDEs only
+    from anyplace.ui.components import (
+        MenuItem,
+        banner,
+        card,
+        count_noun,
+        data_table,
+        hint_bar,
+        kv,
+        menu,
+        progress_line,
+        rule,
+        steps,
+        truncate,
+        wrap,
+    )
+    from anyplace.ui.layout import (
+        LG,
+        MD,
+        SM,
+        XS,
+        Layout,
+        breakpoint_for,
+        content_width,
+        is_narrow,
+        is_termux,
+        supports_color,
+        supports_emoji,
+        supports_unicode,
+        terminal_size,
+    )
+    from anyplace.ui.prompts import (
+        Choice,
+        GoBack,
+        InputFn,
+        PromptAbort,
+        QuitApp,
+        ask_choice,
+        ask_multi,
+        ask_text,
+        ask_yes_no,
+        confirm_danger,
+        pause,
+        scripted_input,
+    )
+    from anyplace.ui.theme import ICONS, THEMES, Theme, get_theme

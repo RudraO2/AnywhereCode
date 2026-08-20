@@ -4,6 +4,11 @@ Every check is driven purely through injected fakes: no subprocess, no
 filesystem outside tmp_path, no network.
 """
 
+import pathlib
+import re
+import subprocess
+import sys
+
 import pytest
 
 from anyplace.core import doctor
@@ -731,11 +736,60 @@ def test_run_all_produces_only_known_statuses(tmp_path):
 
 
 def test_doctor_module_imports_no_ui_or_cli_dependencies():
+    """
+    Doctor is pure logic: the caller renders the report however it likes.
+
+    The one permitted exception is ``anyplace.ui.layout``, which is pure
+    stdlib and imports neither rich nor click. Doctor reads the terminal
+    width through it so that it reports the width the UI actually renders at
+    -- including an ``ANYWHERE_WIDTH`` override. Reading ``shutil`` directly
+    made doctor report a different width from the one in use, which is the
+    wrong answer from the command whose job is to describe your device.
+    """
     source = open(doctor.__file__, "r").read()
     assert "import rich" not in source
     assert "import click" not in source
     assert "from anyplace.cli" not in source
-    assert "from anyplace.ui" not in source
+
+    ui_imports = set(re.findall(r"from (anyplace\.ui[.\w]*) import", source))
+    assert ui_imports <= {"anyplace.ui.layout"}, (
+        "doctor may only reach into anyplace.ui.layout, not %s" % sorted(ui_imports)
+    )
+
+
+def test_importing_doctor_does_not_load_the_rendering_stack():
+    """The property the import rule is actually protecting."""
+    code = (
+        "import sys;"
+        "import anyplace.core.doctor;"
+        "assert 'rich' not in sys.modules, sorted(m for m in sys.modules if 'rich' in m);"
+        "assert 'click' not in sys.modules"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=str(pathlib.Path(doctor.__file__).resolve().parents[2]),
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_running_every_check_does_not_load_the_rendering_stack():
+    """Lazy imports inside a check would dodge the import-time test above."""
+    code = (
+        "import sys;"
+        "from anyplace.core.doctor import run_all;"
+        "run_all();"
+        "assert 'rich' not in sys.modules, sorted(m for m in sys.modules if 'rich' in m);"
+        "assert 'click' not in sys.modules"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=str(pathlib.Path(doctor.__file__).resolve().parents[2]),
+    )
+    assert result.returncode == 0, result.stderr
 
 
 # --------------------------------------------------------------------------

@@ -153,10 +153,10 @@ It never prints your API key.
 
 ## Project ideas built in
 
-Sixteen one-tap starting points across all five scaffolds — portfolio site,
+Seventeen one-tap starting points across all six scaffolds — portfolio site,
 landing page, link in bio, countdown timer, data dashboard, todo app, notes app,
 blog, expense tracker, online store, business API, chat bot backend, webhook
-receiver, URL shortener, habit tracker, photo journal.
+receiver, URL shortener, habit tracker, photo journal, Android home widget.
 
 Picking one pre-answers the interview. You can still change anything afterwards.
 
@@ -169,6 +169,7 @@ Picking one pre-answers the interview. You can still change anything afterwards.
 | FastAPI API | A Python REST API with docs built in | intermediate | yes |
 | Next.js app | Pages plus a database in one project | intermediate | needs a real host |
 | Expo mobile app | One app for iPhone and Android | advanced | build on desktop/CI |
+| Android (Kotlin) | Native Android with Jetpack Compose | advanced | build on desktop/CI |
 
 Scaffolds are starting files, not a cage. The AI writes the actual code, and you
 own every line of it.
@@ -195,9 +196,21 @@ anywhere deploy --dir .          # EAS / GitHub Actions deployment config
 ## Safety
 
 The agentic pipeline runs real commands on your device, so every command is
-checked against a blocklist first. `rm -rf`, `chmod 777`, `sudo`, `curl | bash`,
-`git push --force`, `git reset --hard`, fork bombs and disk overwrites are all
-refused before execution.
+checked before it runs — against an **allowlist**, not a list of things to
+avoid.
+
+A denylist of dangerous spellings can never be complete: `rm` has a dozen
+equivalents, and any interpreter with an inline-code flag (`python -c`,
+`node -e`) can express all of them in a form no regex anticipates. So the gate
+works the other way round. It knows the build tools this pipeline needs — npm,
+pip, cargo, go, git and a handful more — and refuses everything else, including
+every shell binary. On top of that sit per-tool rules (`git push --force`,
+`chmod -R` and `python -c` are refused even though git, chmod and python are
+allowed) and a residual check for a dangerous payload smuggled through an
+allowed tool, like `npm run clean -- "rm -rf /"`.
+
+Anything it cannot fully understand — a malformed argv, an unrecognised
+program — is refused rather than guessed at.
 
 By default you approve each step before it runs. Your API key is stored in
 `~/.config/anyplace/config.yaml` with `0600` permissions and never leaves the
@@ -237,7 +250,7 @@ anyplace/
   ui/          layout, theme, components, prompts — the phone-first toolkit
   cli/         screens and commands built on ui/
   core/        interview, recommender, planner, generator, doctor, pipeline
-  templates/   the five scaffolds
+  templates/   the six scaffolds
   mcp/         MCP server, so Claude can drive all of this
 tests/         pytest suite
 ```

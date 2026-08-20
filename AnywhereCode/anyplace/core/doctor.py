@@ -463,12 +463,27 @@ def check_path_entry(
 
 
 def check_terminal(width: Optional[int] = None) -> Check:
-    """Terminal width - below 25 columns the UI cannot lay out at all."""
+    """Terminal width - below 25 columns the UI cannot lay out at all.
+
+    Reads the width the same way the UI does, via ``ui.layout.terminal_size``,
+    so ``ANYWHERE_WIDTH`` is honoured here too. Asking ``shutil`` directly
+    would make doctor report a width the app is not actually rendering at --
+    exactly the wrong answer from the one command whose job is to tell you the
+    truth about your device.
+
+    (``ui.layout`` is pure stdlib and imports neither rich nor click, so this
+    does not drag the UI stack into a core module.)
+    """
     if width is None:
         try:
-            width = shutil.get_terminal_size((80, 24)).columns
-        except Exception:
-            width = 80
+            from anyplace.ui.layout import terminal_size
+
+            width = terminal_size()[0]
+        except Exception:  # pragma: no cover - defensive
+            try:
+                width = shutil.get_terminal_size((80, 24)).columns
+            except Exception:
+                width = 80
     try:
         cols = int(width)
     except (TypeError, ValueError):
@@ -477,7 +492,7 @@ def check_terminal(width: Optional[int] = None) -> Check:
             title="Terminal size",
             status=WARN,
             detail="Terminal width could not be determined.",
-            fix="Set COLUMNS, e.g. export COLUMNS=60",
+            fix="Pin it: export ANYWHERE_WIDTH=60",
         )
 
     if cols < TERMINAL_FAIL_WIDTH:

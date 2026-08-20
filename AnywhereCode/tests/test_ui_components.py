@@ -13,6 +13,7 @@ from anyplace.ui.components import (
     MenuItem,
     banner,
     card,
+    count_noun,
     data_table,
     hint_bar,
     kv,
@@ -723,3 +724,31 @@ def test_every_component_fits_across_the_full_range(width):
         progress_line(console, 3, 12, "src/components/Board.tsx")
 
     assert_fits(render(draw, width), width)
+
+
+# ---------------------------------------------------------------------------
+# count_noun
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "count, expected",
+    [(0, "0 things"), (1, "1 thing"), (2, "2 things"), (17, "17 things")],
+)
+def test_count_noun_agrees_with_the_number(count, expected):
+    assert count_noun(count, "thing") == expected
+
+
+def test_count_noun_takes_an_irregular_plural():
+    assert count_noun(1, "entry", "entries") == "1 entry"
+    assert count_noun(3, "entry", "entries") == "3 entries"
+
+
+def test_count_noun_never_emits_a_parenthetical_plural():
+    for n in range(0, 12):
+        assert "(s)" not in count_noun(n, "thing")
+
+
+def test_count_noun_handles_a_negative_count_sensibly():
+    # Not expected in practice, but it must not produce "-1 things".
+    assert count_noun(-1, "thing") == "-1 thing"

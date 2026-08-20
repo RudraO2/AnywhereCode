@@ -96,7 +96,9 @@ class App:
             self.console.print()
             ui.card(
                 self.console,
-                "{0} thing(s) on this device will get in the way. Worth two minutes now.".format(len(blockers)),
+                "{0} on this device will get in the way. Worth two minutes now.".format(
+                    ui.count_noun(len(blockers), "thing")
+                ),
                 title="Quick check",
                 tone="warn",
                 layout=self.layout,
