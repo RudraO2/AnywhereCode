@@ -1,8 +1,10 @@
+# Runtime — deliberately small. Everything here is pure Python so that
+# `pip install` works on Termux/aarch64 without a compiler.
 requests>=2.28.0
 click>=8.0.0
 pyyaml>=6.0
 rich>=13.0.0
 
-# Phase 4 - optional: only needed for `anyplace serve` (MCP server)
-# Install with: pip install mcp>=1.0.0
-# mcp>=1.0.0
+# Optional extras (not installed by default):
+#   pip install 'anywhere-code[mcp]'   # MCP server: `anywhere serve`
+#   pip install 'anywhere-code[dev]'   # pytest, for running the test suite

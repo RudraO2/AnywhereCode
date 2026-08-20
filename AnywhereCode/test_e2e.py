@@ -179,8 +179,13 @@ def test_plan_approval():
         )
 
         print("\n📋 Plan Preview:")
-        display_plan_summary(plan)
-        display_file_plan(plan)
+        # Both take the console they render to, so a caller can point them at a
+        # capture buffer instead of the terminal.
+        from rich.console import Console
+
+        console = Console()
+        display_plan_summary(plan, console)
+        display_file_plan(plan, console)
 
         print("\n✅ Plan Display Working")
         return True

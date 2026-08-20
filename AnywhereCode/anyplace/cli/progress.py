@@ -1,168 +1,132 @@
 """
-Progress display during code generation.
+Live progress during generation.
 
-Shows progress bars, current file, and generation status.
+Generating 20 files over a mobile connection takes minutes. The screen has to
+answer "is it stuck?" at a glance, in 32 columns, without scrolling away the
+thing you were reading.
 """
 
-from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
-from rich.live import Live
-from rich.panel import Panel
-from rich.text import Text
-from typing import Optional, List
+from __future__ import annotations
 
-console = Console()
+import time
+from typing import List, Optional
+
+from anyplace.ui import components as ui
+from anyplace.ui.layout import Layout
+from anyplace.ui.theme import get_theme
+
+
+def format_duration(seconds: float) -> str:
+    """Human duration, always short enough for a status line."""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return "{0}s".format(seconds)
+    if seconds < 3600:
+        return "{0}m {1:02d}s".format(seconds // 60, seconds % 60)
+    return "{0}h {1:02d}m".format(seconds // 3600, (seconds % 3600) // 60)
 
 
 class GenerationProgress:
-    """Manages progress display during code generation."""
+    """Progress display for a run of file generation."""
 
-    def __init__(self, total_files: int, project_name: str):
-        """
-        Initialize progress display.
+    def __init__(self, total_files: int, project_name: str, console=None, layout: Optional[Layout] = None):
+        if console is None:
+            from rich.console import Console
 
-        Args:
-            total_files: Total number of files to generate
-            project_name: Name of the project being generated
-        """
-        self.total_files = total_files
+            console = Console()
+        self.console = console
+        self.layout = layout or Layout.detect()
+        self.total_files = max(0, total_files)
         self.project_name = project_name
         self.generated_files: List[str] = []
         self.current_file = ""
         self.current_index = 0
+        self.started_at: Optional[float] = None
 
-    def show_generation_start(self):
-        """Show start of generation."""
-        console.print(f"\n[bold cyan]🚀 Generating {self.project_name}[/bold cyan]")
-        console.print(f"[dim]{self.total_files} files to generate...[/dim]\n")
+    # ── lifecycle ────────────────────────────────────────────────────────
 
-    def show_file_progress(self, file_path: str, index: int, total: int):
-        """
-        Show progress for current file.
+    def show_generation_start(self) -> None:
+        self.started_at = time.time()
+        theme = get_theme()
+        self.console.print()
+        pad = " " * self.layout.gutter
+        self.console.print(
+            pad + "{0} Writing {1} — {2} file{3}".format(
+                theme.icon("run", emoji=self.layout.emoji),
+                ui.truncate(self.project_name, max(8, self.layout.body_width - 20)),
+                self.total_files,
+                "" if self.total_files == 1 else "s",
+            ),
+            style=theme.style("accent"),
+        )
+        if not self.layout.narrow:
+            self.console.print(pad + "Each file is written in dependency order.", style=theme.style("muted"))
+        self.console.print()
 
-        Args:
-            file_path: Path of current file being generated
-            index: Current file index (1-based)
-            total: Total files
-        """
+    def show_file_progress(self, file_path: str, index: int, total: int) -> None:
         self.current_file = file_path
         self.current_index = index
+        self.generated_files.append(file_path)
+        ui.progress_line(self.console, index, total, file_path, layout=self.layout)
 
-        # Calculate percentage
-        percent = int((index / total) * 100)
-
-        # Show progress bar
-        bar_length = 30
-        filled = int(bar_length * index / total)
-        bar = "█" * filled + "░" * (bar_length - filled)
-
-        status_line = (
-            f"[cyan]{bar}[/cyan] "
-            f"[bold]{index:2d}/{total}[/bold] "
-            f"[yellow]{percent:3d}%[/yellow] "
-            f"[dim]|[/dim] "
-            f"[green]{file_path}[/green]"
+    def show_generation_complete(self, project_dir: str) -> None:
+        theme = get_theme()
+        pairs = [
+            ("Project", self.project_name),
+            ("Files", str(len(self.generated_files) or self.total_files)),
+            ("Where", str(project_dir)),
+        ]
+        if self.started_at:
+            pairs.append(("Took", format_duration(time.time() - self.started_at)))
+        self.console.print()
+        ui.kv(
+            self.console,
+            pairs,
+            layout=self.layout,
+            title="{0} Written".format(theme.icon("ok", emoji=self.layout.emoji)),
         )
 
-        console.print(status_line)
-
-    def show_generation_complete(self, project_dir: str):
-        """
-        Show generation completion.
-
-        Args:
-            project_dir: Directory where project was generated
-        """
-        summary = Text()
-        summary.append(f"\n✅ [bold green]Project generated![/bold green]\n\n")
-        summary.append(f"Project: ", style="bold cyan")
-        summary.append(f"{self.project_name}\n")
-        summary.append(f"Location: ", style="bold cyan")
-        summary.append(f"{project_dir}\n")
-        summary.append(f"Files: ", style="bold cyan")
-        summary.append(f"{self.total_files}")
-
-        console.print(Panel(summary, border_style="green", padding=(1, 2)))
-
-    def show_generation_error(self, error_msg: str, file_path: Optional[str] = None):
-        """
-        Show generation error.
-
-        Args:
-            error_msg: Error message
-            file_path: File where error occurred (if known)
-        """
-        error_text = Text()
+    def show_generation_error(self, error_msg: str, file_path: Optional[str] = None) -> None:
+        body = error_msg
         if file_path:
-            error_text.append(f"While generating: ", style="bold yellow")
-            error_text.append(f"{file_path}\n\n")
+            body = "Stopped at: {0}\n\n{1}".format(file_path, error_msg)
+        if self.current_index:
+            body += "\n\n{0} of {1} files were written before this.".format(self.current_index, self.total_files)
+        ui.card(self.console, body, title="Generation failed", tone="err", layout=self.layout)
 
-        error_text.append(error_msg)
+    # ── extras ───────────────────────────────────────────────────────────
 
-        console.print(Panel(
-            error_text,
-            title="❌ Generation Failed",
-            border_style="red",
-        ))
-
-    def show_file_list(self, files: List[str]):
-        """
-        Show summary of files generated.
-
-        Args:
-            files: List of generated file paths
-        """
-        console.print(f"\n[bold cyan]📁 Generated Files:[/bold cyan]\n")
+    def show_file_list(self, files: List[str]) -> None:
+        self.console.print()
+        ui.rule(self.console, "Written", layout=self.layout)
+        icon = get_theme().icon("check", emoji=self.layout.emoji)
         for file_path in files:
-            console.print(f"  ✅ {file_path}")
+            self.console.print("  {0} {1}".format(icon, ui.truncate(file_path, self.layout.body_width - 4)))
 
-    def show_estimated_time(self, files: int, avg_secs_per_file: float = 2.0):
-        """Show estimated time remaining."""
-        remaining = max(1, files - self.current_index)
-        estimated_secs = int(remaining * avg_secs_per_file)
-
-        if estimated_secs < 60:
-            time_str = f"{estimated_secs}s"
-        elif estimated_secs < 3600:
-            time_str = f"{estimated_secs // 60}m {estimated_secs % 60}s"
-        else:
-            time_str = f"{estimated_secs // 3600}h {(estimated_secs % 3600) // 60}m"
-
-        return f"[dim]ETA: {time_str}[/dim]"
+    def eta(self, avg_secs_per_file: float = 2.0) -> str:
+        """Best-guess remaining time, measured rather than assumed once we have data."""
+        remaining = max(0, self.total_files - self.current_index)
+        if self.started_at and self.current_index:
+            avg_secs_per_file = (time.time() - self.started_at) / self.current_index
+        return format_duration(remaining * avg_secs_per_file)
 
 
 class ProgressTracker:
-    """Simple progress tracker without live updating."""
+    """Headless counter, handy for callers that render their own output."""
 
     def __init__(self, total: int):
-        """Initialize progress tracker."""
-        self.total = total
+        self.total = max(0, total)
         self.current = 0
         self.items: List[str] = []
 
-    def add(self, item: str):
-        """Add a completed item."""
+    def add(self, item: str) -> None:
         self.current += 1
         self.items.append(item)
 
     def get_progress_percent(self) -> int:
-        """Get progress as percentage."""
         if self.total == 0:
             return 0
         return int((self.current / self.total) * 100)
 
     def get_summary(self) -> str:
-        """Get summary of progress."""
-        return f"{self.current}/{self.total} ({self.get_progress_percent()}%)"
-
-
-if __name__ == "__main__":
-    # Test progress display
-    progress = GenerationProgress(5, "test-app")
-    progress.show_generation_start()
-
-    for i in range(1, 6):
-        progress.show_file_progress(f"src/file{i}.ts", i, 5)
-
-    progress.show_file_list([f"src/file{i}.ts" for i in range(1, 6)])
-    progress.show_generation_complete("/home/user/projects/test-app")
+        return "{0}/{1} ({2}%)".format(self.current, self.total, self.get_progress_percent())

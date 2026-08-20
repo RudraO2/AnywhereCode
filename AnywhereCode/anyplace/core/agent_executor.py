@@ -30,54 +30,155 @@ from dataclasses import dataclass, field
 from anyplace.cli.error_handler import GenerationError
 
 
-# ── Safety: blocked command patterns ─────────────────────────────────────
-# These patterns are checked against every command before it runs.
-# If any pattern matches, the command is REFUSED.
+# ── Safety: what the pipeline is allowed to run ──────────────────────────
+#
+# The gate is an ALLOWLIST, not a denylist.
+#
+# A denylist of dangerous spellings can never be complete: `rm` has a dozen
+# equivalents, and any interpreter with an inline-code flag (`python -c`,
+# `node -e`) can express every one of them in a form no regex anticipates.
+# So instead of guessing at what is dangerous, we enumerate the small set of
+# build tools this pipeline actually needs and refuse everything else.
+#
+# Four layers, checked in order:
+#   1. Shape      -- the argv must be a sequence of strings, or we fail closed.
+#   2. Program    -- argv[0] must be one of ALLOWED_PROGRAMS.
+#   3. Arguments  -- per-program rules for tools that stay dangerous even when
+#                    the binary itself is legitimate (git push --force,
+#                    chmod -R, python -c ...).
+#   4. Content    -- a residual denylist over the whole command, to catch a
+#                    dangerous payload smuggled through an allowed program
+#                    (`npm run clean -- "rm -rf /"`).
+#
+# Note that commands run with shell=False, so shell metacharacters are inert
+# as characters. They still matter to layer 4, because a single argument
+# containing them is flattened into the string we scan -- and because a shell
+# binary would genuinely re-introduce a shell, which is exactly why no shell
+# appears in ALLOWED_PROGRAMS below.
+
+ALLOWED_PROGRAMS = {
+    # JavaScript / TypeScript
+    "npm", "npx", "yarn", "pnpm", "bun", "bunx", "node", "deno", "tsc",
+    # Python
+    "python", "python3", "pip", "pip3", "poetry", "pipenv", "uv", "pytest",
+    # Rust / Go
+    "cargo", "rustc", "rustup", "go", "gofmt",
+    # JVM / .NET / PHP
+    "gradle", "gradlew", "mvn", "java", "javac", "dotnet", "php", "composer",
+    # Version control
+    "git",
+    # Benign file utilities the scaffolder needs
+    "ls", "cat", "echo", "mkdir", "touch", "cp", "mv", "chmod", "make",
+    # Container tooling (build only -- see _ARGUMENT_RULES)
+    "docker", "docker-compose",
+}
+
+# Programs whose *inline code* flags turn them into a general-purpose shell.
+# `python3 -m py_compile main.py` is fine; `python3 -c "<anything>"` is not,
+# because the payload is opaque to any check we could write.
+_INLINE_CODE_FLAGS = {
+    "python": {"-c"},
+    "python3": {"-c"},
+    "node": {"-e", "--eval", "-p", "--print"},
+    "deno": {"eval"},
+    "bun": {"-e", "--eval"},
+    "php": {"-r"},
+}
+
+
+def _check_git(args: List[str]) -> str:
+    """Rules for git. Returns a refusal reason, or '' if the command is fine."""
+    joined = " ".join(args)
+    if not args:
+        return ""
+    sub = args[0]
+    if sub == "push" and re.search(r"(^|\s)(--force\b|--force-with-lease\b|-f\b)", joined):
+        return "git push --force rewrites published history"
+    if sub == "reset" and "--hard" in args:
+        return "git reset --hard discards uncommitted work"
+    if sub == "clean" and any(re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in args):
+        return "git clean -f deletes untracked files irreversibly"
+    return ""
+
+
+def _check_chmod(args: List[str]) -> str:
+    """Rules for chmod. `chmod +x script.sh` is fine; world-writable is not."""
+    for arg in args:
+        if arg in ("777", "666", "000", "0777", "0666", "0000"):
+            return "chmod %s grants unsafe permissions" % arg
+        if re.fullmatch(r"-[a-zA-Z]*R[a-zA-Z]*", arg):
+            return "chmod -R rewrites permissions recursively"
+    return ""
+
+
+def _check_inline_code(program: str, args: List[str]) -> str:
+    """Refuse interpreters invoked with an inline-code flag."""
+    flags = _INLINE_CODE_FLAGS.get(program)
+    if not flags:
+        return ""
+    for arg in args:
+        if arg in flags:
+            return (
+                "%s %s runs arbitrary inline code, which cannot be inspected"
+                % (program, arg)
+            )
+    return ""
+
+
+def _check_docker(args: List[str]) -> str:
+    """Docker may build and inspect; it may not prune or mount the host."""
+    if args and args[0] in ("system", "volume", "image", "container", "network"):
+        if "prune" in args:
+            return "docker prune deletes data outside the project"
+    if any(a in ("-v", "--volume", "--privileged") for a in args):
+        return "docker volume mounts / --privileged reach outside the sandbox"
+    return ""
+
+
+_ARGUMENT_RULES = {
+    "git": _check_git,
+    "chmod": _check_chmod,
+    "docker": _check_docker,
+    "docker-compose": _check_docker,
+}
+
+
+# ── Layer 4: residual content denylist ───────────────────────────────────
+# These run against the whole joined command, after the program allowlist has
+# already had its say. Their job is narrow: catch a dangerous payload passed
+# as an argument to a program we *do* allow. They are deliberately specific --
+# a pattern loose enough to match a commit message would make the tool refuse
+# ordinary work, which is its own kind of failure.
 
 BLOCKED_PATTERNS = [
-    # File destruction
-    r"\brm\s+(-[a-zA-Z]*[rf])",       # rm -rf, rm -f, rm -r
-    r"\brm\s+--force",
-    r"\brm\s+--recursive",
+    # Recursive/forced deletion smuggled into an argument
+    r"\brm\s+-[a-zA-Z]*[rf]",
+    r"\brm\s+--(force|recursive)\b",
     r"\brmdir\b",
     r"\bshred\b",
     r"\bwipe\b",
-    # Dangerous permissions
-    r"\bchmod\s+(777|666|000)",         # chmod 777, chmod 666, chmod 000
-    r"\bchmod\s+(-[a-zA-Z]*R)",        # chmod -R (recursive perms)
-    r"\bchown\s+(-[a-zA-Z]*R)",        # chown -R
-    # System damage
-    r"\bmkfs\b",                        # format filesystem
-    r"\bdd\s+if=",                      # dd (disk destroyer)
-    r"\bformat\b",
-    r"\bfdisk\b",
-    # Network danger
-    r"\bcurl\b.*\|\s*(ba)?sh",          # curl | bash (pipe to shell)
-    r"\bwget\b.*\|\s*(ba)?sh",
-    # Kill/shutdown
-    r"\bkill\s+-9\s+(-1|1)\b",         # kill -9 -1 (kill all processes)
-    r"\bkillall\b",
-    r"\bshutdown\b",
-    r"\breboot\b",
-    r"\bpoweroff\b",
-    r"\binit\s+[06]\b",
-    # Destructive git
-    r"\bgit\s+push\s+.*--force",
-    r"\bgit\s+reset\s+--hard",
-    r"\bgit\s+clean\s+-[a-zA-Z]*f",
-    # Sneaky shell tricks
-    r":\(\)\s*\{",                      # fork bomb
-    r"\beval\b",
-    r"\bexec\b",
-    r"\b>\s*/dev/sd",                   # overwrite disk
-    r"\b>\s*/dev/null\b.*2>&1.*\brm\b", # hidden rm
-    # Python destruction
-    r"python.*-c.*import\s+shutil.*rmtree",
-    r"python.*-c.*os\.remove",
-    # Termux-specific protection
-    r"\btermux-.*-permission",
-    r"\bsu\s+-",
+    # Privilege escalation
     r"\bsudo\b",
+    r"\bsu\s+-",
+    r"\bdoas\b",
+    # Piping the network into a shell
+    r"\b(curl|wget)\b[^|]*\|\s*(ba|z|k)?sh\b",
+    # Disk and filesystem destruction
+    r"\bmkfs(\.[a-z0-9]+)?\b",
+    r"\bdd\s+if=",
+    r"\bfdisk\b",
+    r">\s*/dev/(sd|nvme|mmcblk|hd)",
+    # Fork bomb, with or without the usual spacing
+    r":\s*\(\s*\)\s*\{",
+    # Killing the machine or every process on it
+    r"\bkill\s+-9\s+(-1|1)\b",
+    r"\bkillall\b",
+    r"\b(shutdown|reboot|poweroff|halt)\b",
+    r"\binit\s+[06]\b",
+    # World-writable permissions smuggled into an argument
+    r"\bchmod\s+0?(777|666|000)\b",
+    # Termux permission grants
+    r"\btermux-[a-z-]*permission\b",
 ]
 
 BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
@@ -85,15 +186,61 @@ BLOCKED_RE = [re.compile(p, re.IGNORECASE) for p in BLOCKED_PATTERNS]
 
 def is_command_safe(cmd: List[str]) -> tuple:
     """
-    Check if a command is safe to run.
+    Decide whether a command may be handed to subprocess.run.
+
+    This is the only thing standing between an LLM-chosen command and the
+    user's device, so it fails closed: anything it cannot fully understand is
+    refused.
+
+    Args:
+        cmd: The argv list, exactly as it would be passed to subprocess.
 
     Returns:
-        (is_safe: bool, reason: str)
+        (is_safe, reason). `reason` is '' when the command is allowed, and
+        always a human-readable explanation when it is not.
     """
+    # ── Layer 1: shape ───────────────────────────────────────────────────
+    if cmd is None:
+        return False, "No command given"
+    if not isinstance(cmd, (list, tuple)):
+        return False, "Command must be a list of arguments, got %s" % type(cmd).__name__
+    if not all(isinstance(part, str) for part in cmd):
+        return False, "Every argument must be a string"
+
+    if not cmd:
+        # An empty argv cannot run anything; the caller fails on cmd[0] first.
+        return True, ""
+
+    # ── Layer 2: program allowlist ───────────────────────────────────────
+    program = os.path.basename(cmd[0]).lower()
+    if program.endswith(".exe"):
+        program = program[:-4]
+
+    if program not in ALLOWED_PROGRAMS:
+        return False, (
+            "%s is not one of the build tools Anywhere Code is allowed to run. "
+            "Allowed: %s" % (cmd[0], ", ".join(sorted(ALLOWED_PROGRAMS)))
+        )
+
+    # ── Layer 3: per-program argument rules ──────────────────────────────
+    args = [a for a in cmd[1:] if a]
+
+    inline = _check_inline_code(program, args)
+    if inline:
+        return False, inline
+
+    rule = _ARGUMENT_RULES.get(program)
+    if rule:
+        reason = rule(args)
+        if reason:
+            return False, reason
+
+    # ── Layer 4: residual content denylist ───────────────────────────────
     cmd_str = " ".join(cmd)
     for pattern in BLOCKED_RE:
         if pattern.search(cmd_str):
-            return False, f"Blocked dangerous pattern: {pattern.pattern}"
+            return False, "Blocked dangerous pattern: %s" % pattern.pattern
+
     return True, ""
 
 

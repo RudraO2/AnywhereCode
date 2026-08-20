@@ -2,7 +2,11 @@
   "name": "backend-nodejs",
   "type": "backend",
   "description": "REST API with Node.js & Express",
-  "tech_stack": ["Node.js", "Express", "TypeScript"],
+  "tech_stack": [
+    "Node.js",
+    "Express",
+    "TypeScript"
+  ],
   "files_to_generate": [
     "package.json",
     "tsconfig.json",
@@ -19,5 +23,36 @@
     "TypeScript support",
     "Error handling middleware"
   ],
-  "estimated_time": "15 minutes"
+  "estimated_time": "15 minutes",
+  "keywords": [
+    "api",
+    "rest",
+    "backend",
+    "server",
+    "node",
+    "nodejs",
+    "express",
+    "typescript",
+    "javascript",
+    "webhook",
+    "endpoints",
+    "middleware",
+    "json",
+    "microservice"
+  ],
+  "display_name": "Express API",
+  "tagline": "A Node REST API in TypeScript",
+  "good_for": [
+    "REST APIs",
+    "webhook receivers",
+    "small always-on services",
+    "JavaScript-only stacks"
+  ],
+  "not_for": [
+    "data science workloads",
+    "apps with a user interface"
+  ],
+  "mobile_friendly": true,
+  "runs_on_phone": "Runs in Termux once nodejs is installed",
+  "difficulty": "intermediate"
 }

@@ -2,7 +2,11 @@
   "name": "web-react-vite",
   "type": "web",
   "description": "Single-page app with React & Vite",
-  "tech_stack": ["React", "Vite", "TypeScript"],
+  "tech_stack": [
+    "React",
+    "Vite",
+    "TypeScript"
+  ],
   "files_to_generate": [
     "index.html",
     "src/main.tsx",
@@ -19,5 +23,36 @@
     "TypeScript support",
     "Modern JavaScript"
   ],
-  "estimated_time": "10 minutes"
+  "estimated_time": "10 minutes",
+  "keywords": [
+    "web",
+    "website",
+    "frontend",
+    "react",
+    "vite",
+    "spa",
+    "single page",
+    "landing page",
+    "portfolio",
+    "dashboard",
+    "static site",
+    "browser",
+    "typescript",
+    "ui"
+  ],
+  "display_name": "React web app",
+  "tagline": "A fast single-page site in the browser",
+  "good_for": [
+    "marketing and landing pages",
+    "portfolios and link pages",
+    "dashboards over an existing API",
+    "small browser tools"
+  ],
+  "not_for": [
+    "saving data on a server",
+    "user accounts and logins"
+  ],
+  "mobile_friendly": true,
+  "runs_on_phone": "Vite dev server runs fine in Termux",
+  "difficulty": "beginner"
 }

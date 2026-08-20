@@ -413,25 +413,58 @@ class LLMProvider:
                 except (json.JSONDecodeError, IndexError):
                     pass
 
-        # Strategy 3: find the first '{' and walk to its matching '}'
+        # Strategy 3: walk from each '{' to its matching '}'.
+        #
+        # The brace counting has to know about string literals: a model that
+        # writes {"note": "use } carefully"} would otherwise close the object at
+        # the brace inside the string and produce garbage.
         for start_idx, ch in enumerate(response):
             if ch != "{":
                 continue
-            depth = 0
-            for end_idx in range(start_idx, len(response)):
-                if response[end_idx] == "{":
-                    depth += 1
-                elif response[end_idx] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            candidate = response[start_idx:end_idx + 1]
-                            result = self._as_dict(json.loads(candidate))
-                            if result:
-                                return result
-                        except json.JSONDecodeError:
-                            pass
-                        break  # Move on to next '{'
+
+            end_idx = self._matching_brace(response, start_idx)
+            if end_idx is None:
+                continue
+
+            try:
+                result = self._as_dict(json.loads(response[start_idx : end_idx + 1]))
+            except json.JSONDecodeError:
+                continue
+
+            # `is not None` rather than truthiness: {} is a valid parse and
+            # discarding it sends the caller down the retry path for nothing.
+            if result is not None:
+                return result
+
+        return None
+
+    @staticmethod
+    def _matching_brace(text: str, start: int) -> Optional[int]:
+        """Index of the '}' that closes the '{' at `start`, ignoring braces inside strings."""
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for index in range(start, len(text)):
+            char = text[index]
+
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return index
 
         return None
 

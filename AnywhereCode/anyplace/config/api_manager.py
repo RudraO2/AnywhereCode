@@ -24,13 +24,36 @@ class APIManager:
 
     def _load_config(self) -> Dict:
         """Load configuration from file."""
-        if self.config_file.exists():
-            try:
-                with open(self.config_file, "r") as f:
-                    return yaml.safe_load(f) or {"providers": {}}
-            except yaml.YAMLError as e:
-                raise ConfigError(f"Invalid YAML in config.yaml: {e}")
-        return {"providers": {}}
+        if not self.config_file.exists():
+            return {"providers": {}}
+
+        try:
+            with open(self.config_file, "r") as f:
+                loaded = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ConfigError(f"Invalid YAML in config.yaml: {e}")
+
+        if loaded is None:
+            return {"providers": {}}
+
+        # A hand-edited config that parses to a list or a bare string used to
+        # sail through here and blow up later on the first .get() call.
+        if not isinstance(loaded, dict):
+            raise ConfigError(
+                f"{self.config_file} should contain a mapping, not a "
+                f"{type(loaded).__name__}. Delete it and run: anywhere configure"
+            )
+
+        providers = loaded.get("providers")
+        if providers is None:
+            loaded["providers"] = {}
+        elif not isinstance(providers, dict):
+            raise ConfigError(
+                f"'providers' in {self.config_file} should be a mapping. "
+                "Delete the file and run: anywhere configure"
+            )
+
+        return loaded
 
     def _save_config(self):
         """Save configuration to file."""
@@ -100,7 +123,7 @@ class APIManager:
             if not providers:
                 raise ConfigError(
                     "No LLM provider configured.\n"
-                    "Run: anyplace --configure"
+                    "Run: anywhere configure"
                 )
             active = list(providers.keys())[0]
 

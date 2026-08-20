@@ -64,8 +64,15 @@ class MockLLMProvider:
         system: Optional[str] = None,
         temperature: float = 0.3,
         max_tokens: int = 4096,
+        response_schema: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Generate mock JSON."""
+        """
+        Generate mock JSON.
+
+        ``response_schema`` is accepted and ignored: PlanGenerator always passes
+        it, so without this parameter the project's own offline mock could not
+        drive plan generation at all.
+        """
         if "plan" in prompt.lower():
             return self._mock_plan_json()
         return {"success": True, "data": []}

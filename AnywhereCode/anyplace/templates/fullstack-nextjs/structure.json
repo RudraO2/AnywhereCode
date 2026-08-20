@@ -2,7 +2,12 @@
   "name": "fullstack-nextjs",
   "type": "fullstack",
   "description": "Full-stack app with Next.js, TypeScript & PostgreSQL",
-  "tech_stack": ["Next.js", "TypeScript", "PostgreSQL", "Prisma"],
+  "tech_stack": [
+    "Next.js",
+    "TypeScript",
+    "PostgreSQL",
+    "Prisma"
+  ],
   "files_to_generate": [
     "package.json",
     "tsconfig.json",
@@ -26,5 +31,37 @@
     "Ready for NextAuth.js",
     "Optimized images with next/image"
   ],
-  "estimated_time": "20 minutes"
+  "estimated_time": "20 minutes",
+  "keywords": [
+    "fullstack",
+    "nextjs",
+    "next",
+    "react",
+    "web app",
+    "database",
+    "postgres",
+    "prisma",
+    "auth",
+    "login",
+    "api routes",
+    "crud",
+    "saas",
+    "server components",
+    "typescript"
+  ],
+  "display_name": "Next.js app",
+  "tagline": "Pages plus a database in one project",
+  "good_for": [
+    "apps that save user data",
+    "logins and accounts",
+    "content sites with an editor",
+    "small SaaS products"
+  ],
+  "not_for": [
+    "quick one-page demos",
+    "building on a low-memory phone"
+  ],
+  "mobile_friendly": false,
+  "runs_on_phone": "Builds are heavy; use a desktop or CI to build",
+  "difficulty": "intermediate"
 }

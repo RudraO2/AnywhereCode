@@ -2,7 +2,13 @@
   "name": "backend-python-fastapi",
   "type": "backend",
   "description": "Modern Python REST API with FastAPI, SQLAlchemy & Alembic",
-  "tech_stack": ["Python", "FastAPI", "SQLAlchemy", "Alembic", "Pydantic"],
+  "tech_stack": [
+    "Python",
+    "FastAPI",
+    "SQLAlchemy",
+    "Alembic",
+    "Pydantic"
+  ],
   "files_to_generate": [
     "requirements.txt",
     "main.py",
@@ -31,5 +37,36 @@
     "JWT authentication ready",
     "Dockerized for easy deployment"
   ],
-  "estimated_time": "20 minutes"
+  "estimated_time": "20 minutes",
+  "keywords": [
+    "api",
+    "rest",
+    "backend",
+    "server",
+    "python",
+    "fastapi",
+    "sqlalchemy",
+    "alembic",
+    "pydantic",
+    "swagger",
+    "json",
+    "endpoints",
+    "jwt",
+    "microservice",
+    "webhook"
+  ],
+  "display_name": "FastAPI API",
+  "tagline": "A Python REST API with docs built in",
+  "good_for": [
+    "REST APIs",
+    "bot and webhook backends",
+    "data and reporting services",
+    "JSON endpoints for an app"
+  ],
+  "not_for": [
+    "anything with a user interface"
+  ],
+  "mobile_friendly": true,
+  "runs_on_phone": "Uvicorn runs in Termux; pure Python deps",
+  "difficulty": "intermediate"
 }
