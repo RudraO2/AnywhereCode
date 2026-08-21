@@ -1,0 +1,55 @@
+{
+  "name": "android-native-kotlin",
+  "type": "mobile",
+  "description": "Android app with Kotlin and Jetpack Compose",
+  "tech_stack": [
+    "Kotlin",
+    "Jetpack Compose",
+    "Gradle"
+  ],
+  "files_to_generate": [
+    "settings.gradle.kts",
+    "build.gradle.kts",
+    "gradle.properties",
+    "app/build.gradle.kts",
+    "app/src/main/AndroidManifest.xml",
+    "app/src/main/java/com/example/app/MainActivity.kt",
+    "app/src/main/java/com/example/app/ui/theme/Theme.kt",
+    "app/src/main/res/values/strings.xml"
+  ],
+  "key_features": [
+    "Modern Android development",
+    "Jetpack architecture components",
+    "Material Design 3",
+    "Single-activity Compose UI"
+  ],
+  "estimated_time": "20 minutes",
+  "keywords": [
+    "kotlin",
+    "jetpack",
+    "compose",
+    "gradle",
+    "android studio",
+    "material design",
+    "play store",
+    "apk",
+    "native android",
+    "activity"
+  ],
+  "display_name": "Android (Kotlin)",
+  "tagline": "Native Android with Jetpack Compose",
+  "good_for": [
+    "Play Store apps",
+    "apps needing native Android APIs",
+    "widgets and background work",
+    "learning Kotlin"
+  ],
+  "not_for": [
+    "iOS",
+    "websites",
+    "building on the phone itself"
+  ],
+  "mobile_friendly": false,
+  "runs_on_phone": "Write it here; Android Studio or CI builds it",
+  "difficulty": "advanced"
+}

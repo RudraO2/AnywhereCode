@@ -1,160 +1,176 @@
-#!/data/data/com.termux/files/usr/bin/bash
-# ──────────────────────────────────────────────────────────
-# AnywhereCode — One-command installer for Termux / Linux
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────
+# Anywhere Code — one-command installer for Termux, Linux and macOS.
 #
-# Usage (Termux):
 #   curl -sL https://raw.githubusercontent.com/RudraO2/Classic-Snake-Made-using-Qwen-/main/install.sh | bash
 #
-# Or manually:
-#   bash install.sh
-# ──────────────────────────────────────────────────────────
+# Re-running this is safe: it updates in place.
+# ─────────────────────────────────────────────────────────────────────
 
-set -e
+set -euo pipefail
 
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BOLD='\033[1m'
-NC='\033[0m'
+REPO_URL="${ANYWHERE_REPO:-https://github.com/RudraO2/Classic-Snake-Made-using-Qwen-.git}"
+BRANCH="${ANYWHERE_BRANCH:-main}"
+INSTALL_DIR="${ANYWHERE_HOME:-$HOME/.anyplace}/app"
+BIN_DIR="$HOME/.local/bin"
 
-banner() {
-    echo -e "${CYAN}${BOLD}"
-    echo "  ╔═══════════════════════════════════════╗"
-    echo "  ║     AnywhereCode Installer            ║"
-    echo "  ║     Code Anywhere — Code Anytime      ║"
-    echo "  ╚═══════════════════════════════════════╝"
-    echo -e "${NC}"
-}
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    C='\033[0;36m'; G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; B='\033[1m'; N='\033[0m'
+else
+    C=''; G=''; Y=''; R=''; B=''; N=''
+fi
 
-info()  { echo -e "  ${CYAN}▸${NC} $1"; }
-ok()    { echo -e "  ${GREEN}✓${NC} $1"; }
-warn()  { echo -e "  ${YELLOW}!${NC} $1"; }
-fail()  { echo -e "  ${RED}✗${NC} $1"; exit 1; }
+info() { printf "  ${C}>${N} %s\n" "$1"; }
+ok()   { printf "  ${G}v${N} %s\n" "$1"; }
+warn() { printf "  ${Y}!${N} %s\n" "$1"; }
+fail() { printf "  ${R}x${N} %s\n" "$1" >&2; exit 1; }
 
-banner
+printf "${C}${B}\n"
+printf "   ANYWHERE CODE\n"
+printf "   Build and ship from your phone.\n"
+printf "${N}\n"
 
-# ── Step 1: Detect environment ────────────────────────────
+# ── 1. Where are we? ─────────────────────────────────────────────────
 IS_TERMUX=false
-if [ -d "/data/data/com.termux" ] || [ -n "$TERMUX_APP_PID" ]; then
+if [ -d "/data/data/com.termux" ] || [ -n "${TERMUX_APP_PID:-}" ]; then
     IS_TERMUX=true
-    info "Detected: Termux on Android"
+    info "Termux on Android"
 else
-    info "Detected: Linux / Desktop"
+    info "$(uname -s) desktop"
 fi
 
-# ── Step 2: Install system dependencies ───────────────────
-info "Installing system packages..."
-
+# ── 2. System packages ───────────────────────────────────────────────
 if $IS_TERMUX; then
-    pkg update -y >/dev/null 2>&1 || true
-    pkg install -y python git nodejs >/dev/null 2>&1 || {
-        warn "Some packages may already be installed"
-    }
-    # Setup storage access if not done
-    if [ ! -d "$HOME/storage" ]; then
-        warn "Run 'termux-setup-storage' if you want projects in Downloads"
-    fi
+    info "Installing python, git and node (this takes a minute)..."
+    pkg update -y >/dev/null 2>&1 || warn "Couldn't refresh package lists — carrying on"
+    pkg install -y python git nodejs-lts >/dev/null 2>&1 \
+        || pkg install -y python git nodejs >/dev/null 2>&1 \
+        || warn "Some packages may already be installed"
 else
-    # Check python3
-    if ! command -v python3 &>/dev/null; then
-        fail "python3 not found. Install Python 3.8+ first."
-    fi
-    # Check git
-    if ! command -v git &>/dev/null; then
-        fail "git not found. Install git first."
-    fi
+    command -v python3 >/dev/null 2>&1 || fail "python3 not found. Install Python 3.8 or newer first."
+    command -v git     >/dev/null 2>&1 || fail "git not found. Install git first."
 fi
 
-ok "System packages ready"
+PYTHON="$(command -v python3 || command -v python)"
+[ -n "$PYTHON" ] || fail "No Python interpreter found."
 
-# ── Step 3: Clone or update the repo ─────────────────────
-INSTALL_DIR="$HOME/.anyplace/app"
+PY_OK="$("$PYTHON" -c 'import sys; print(1 if sys.version_info[:2] >= (3, 8) else 0)')"
+[ "$PY_OK" = "1" ] || fail "Python 3.8 or newer is required. Found: $("$PYTHON" --version 2>&1)"
+ok "Python $("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 
+# ── 3. Get the code ──────────────────────────────────────────────────
 if [ -d "$INSTALL_DIR/.git" ]; then
-    info "Updating existing installation..."
-    cd "$INSTALL_DIR"
-    git pull origin main >/dev/null 2>&1 || true
-    ok "Updated to latest version"
+    info "Updating your existing install..."
+    git -C "$INSTALL_DIR" fetch --quiet origin "$BRANCH" || warn "Couldn't reach GitHub — using what's on disk"
+    git -C "$INSTALL_DIR" checkout --quiet "$BRANCH" 2>/dev/null || true
+    git -C "$INSTALL_DIR" merge --quiet --ff-only "origin/$BRANCH" 2>/dev/null || warn "Local changes kept — not fast-forwarding"
+    ok "Up to date"
 else
-    info "Downloading AnywhereCode..."
-    mkdir -p "$HOME/.anyplace"
-    git clone https://github.com/RudraO2/Classic-Snake-Made-using-Qwen-.git "$INSTALL_DIR" >/dev/null 2>&1 || {
-        fail "Failed to clone repository. Check your internet connection."
-    }
+    info "Downloading Anywhere Code..."
+    mkdir -p "$(dirname "$INSTALL_DIR")"
+    git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR" \
+        || fail "Couldn't clone the repository. Check your connection."
     ok "Downloaded"
 fi
 
-# ── Step 4: Install Python dependencies ──────────────────
+APP_DIR="$INSTALL_DIR/AnywhereCode"
+[ -d "$APP_DIR" ] || fail "Install looks incomplete: $APP_DIR is missing."
+
+# ── 4. Python dependencies ───────────────────────────────────────────
 info "Installing Python dependencies..."
-cd "$INSTALL_DIR/AnywhereCode"
+PIP_ARGS="--quiet --disable-pip-version-check"
+# Termux's Python has no externally-managed marker; desktop distros often do.
+if ! "$PYTHON" -m pip install $PIP_ARGS -r "$APP_DIR/requirements.txt" 2>/dev/null; then
+    "$PYTHON" -m pip install $PIP_ARGS --user --break-system-packages -r "$APP_DIR/requirements.txt" 2>/dev/null \
+        || "$PYTHON" -m pip install $PIP_ARGS --user -r "$APP_DIR/requirements.txt" \
+        || fail "Couldn't install Python packages. Try: $PYTHON -m pip install -r $APP_DIR/requirements.txt"
+fi
+ok "Dependencies ready"
 
-pip install --quiet requests click pyyaml rich 2>/dev/null || \
-pip3 install --quiet requests click pyyaml rich 2>/dev/null || {
-    fail "Failed to install Python packages"
-}
-
-ok "Python dependencies installed"
-
-# ── Step 5: Create the 'anyplace' command ────────────────
-info "Setting up 'anyplace' command..."
-
-# Create a simple wrapper script
-WRAPPER_DIR="$HOME/.local/bin"
-mkdir -p "$WRAPPER_DIR"
-
-cat > "$WRAPPER_DIR/anyplace" << 'WRAPPER'
+# ── 5. The commands ──────────────────────────────────────────────────
+mkdir -p "$BIN_DIR"
+write_wrapper() {
+    cat > "$BIN_DIR/$1" <<WRAPPER
 #!/usr/bin/env python3
-import sys, os
-# Add the app to Python path
-app_dir = os.path.expanduser("~/.anyplace/app/AnywhereCode")
-if app_dir not in sys.path:
-    sys.path.insert(0, app_dir)
+"""Launcher for Anywhere Code (installed at $APP_DIR)."""
+import os
+import sys
+
+APP_DIR = os.path.expanduser("$APP_DIR")
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
 
 from anyplace.cli.main import cli
-cli(prog_name="anyplace")
+
+sys.exit(cli(prog_name="$1", obj={}))
 WRAPPER
+    chmod +x "$BIN_DIR/$1"
+}
+write_wrapper anywhere
+write_wrapper anyplace
+ok "'anywhere' command installed"
 
-chmod +x "$WRAPPER_DIR/anyplace"
+# ── 6. PATH (idempotently) ───────────────────────────────────────────
+case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *)
+        SHELL_RC="$HOME/.bashrc"
+        [ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.zshrc"
+        if ! grep -qs 'Anywhere Code' "$SHELL_RC" 2>/dev/null; then
+            {
+                echo ''
+                echo '# Anywhere Code'
+                echo 'export PATH="$HOME/.local/bin:$PATH"'
+            } >> "$SHELL_RC"
+            warn "Added ~/.local/bin to PATH in $(basename "$SHELL_RC")"
+            warn "Run:  source $SHELL_RC   (or just reopen the terminal)"
+        fi
+        export PATH="$BIN_DIR:$PATH"
+        ;;
+esac
 
-# Make sure ~/.local/bin is in PATH
-if [[ ":$PATH:" != *":$WRAPPER_DIR:"* ]]; then
-    # Add to shell profile
-    SHELL_RC="$HOME/.bashrc"
-    if [ -f "$HOME/.zshrc" ]; then
-        SHELL_RC="$HOME/.zshrc"
-    fi
-    echo "" >> "$SHELL_RC"
-    echo '# AnywhereCode' >> "$SHELL_RC"
-    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_RC"
-    export PATH="$WRAPPER_DIR:$PATH"
-    warn "Added ~/.local/bin to PATH in $SHELL_RC"
+# ── 7. Storage on Termux ─────────────────────────────────────────────
+if $IS_TERMUX && [ ! -d "$HOME/storage" ]; then
+    warn "Your projects will land in ~/Downloads until you run: termux-setup-storage"
 fi
 
-ok "'anyplace' command installed"
+# ── 8. Check it actually works ───────────────────────────────────────
+#
+# Deliberately ignores the "no AI provider" check: nobody has configured one
+# yet, and the next thing this script does is offer to. Warning about it here
+# would make every successful first install look half-broken.
+printf "\n"
+BROKEN="$(ANYWHERE_APP_DIR="$APP_DIR" "$PYTHON" - <<'PROBE' 2>/dev/null || true
+import os
+import sys
 
-# ── Step 6: First-time setup prompt ──────────────────────
-echo ""
-echo -e "${GREEN}${BOLD}  Installation complete!${NC}"
-echo ""
-echo -e "  ${BOLD}Quick start:${NC}"
-echo -e "    ${CYAN}anyplace${NC}              — Start creating a project"
-echo -e "    ${CYAN}anyplace configure${NC}    — Set up your AI API key"
-echo ""
+sys.path.insert(0, os.environ["ANYWHERE_APP_DIR"])
+from anyplace.core.doctor import FAIL, run_all
 
-if $IS_TERMUX; then
-    echo -e "  ${YELLOW}Tip:${NC} If 'anyplace' command not found, run:"
-    echo -e "    ${CYAN}source ~/.bashrc${NC}"
-    echo ""
-    echo -e "  ${YELLOW}Projects will save to:${NC} ~/Downloads/"
+report = run_all()
+print(
+    ", ".join(
+        c.title for c in report.checks if c.status == FAIL and c.id != "providers"
+    )
+)
+PROBE
+)"
+if [ -z "$BROKEN" ]; then
+    ok "Everything checks out"
 else
-    echo -e "  ${YELLOW}Projects will save to:${NC} ~/.anyplace/projects/"
+    warn "Installed, but these need attention: $BROKEN"
+    warn "Run: anywhere doctor"
 fi
-echo ""
 
-# Ask if user wants to configure now
-echo -e -n "  Set up your AI provider now? [Y/n] "
-read -r CONFIGURE
-if [ "$CONFIGURE" != "n" ] && [ "$CONFIGURE" != "N" ]; then
-    "$WRAPPER_DIR/anyplace" configure
-fi
+printf "\n${G}${B}  Done.${N}\n\n"
+printf "  ${B}Start here:${N}\n"
+printf "    ${C}anywhere${N}             open the app\n"
+printf "    ${C}anywhere configure${N}   add your AI key (Gemini has a free tier)\n"
+printf "    ${C}anywhere doctor${N}      check this device\n\n"
+
+printf "  Set up your AI provider now? [Y/n] "
+read -r REPLY </dev/tty 2>/dev/null || REPLY="n"
+case "$REPLY" in
+    n|N) printf "  No problem — run 'anywhere configure' when you're ready.\n\n" ;;
+    *)   "$BIN_DIR/anywhere" configure ;;
+esac

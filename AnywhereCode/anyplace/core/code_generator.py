@@ -207,18 +207,46 @@ Architecture: {self.plan.architecture_notes}
 
 Generate the complete, production-ready content for {file_info.path}."""
 
+    def _resolve_inside_project(self, relative_path: str) -> Path:
+        """
+        Turn a plan-supplied path into an absolute path inside the project.
+
+        The path comes from an LLM, which means it is untrusted input. Without a
+        containment check, "../../.ssh/authorized_keys" — or any absolute path,
+        since pathlib's ``/`` discards the left operand when the right one is
+        absolute — would be written wherever it pointed.
+
+        Raises:
+            GenerationError: If the path would land outside the project.
+        """
+        candidate = Path(relative_path)
+        if candidate.is_absolute() or (candidate.drive or candidate.root):
+            raise GenerationError(
+                "Refusing to write outside the project: {0!r} is an absolute path.".format(relative_path)
+            )
+
+        project_root = self.project_dir.resolve()
+        target = (project_root / candidate).resolve()
+
+        if target == project_root or project_root not in target.parents:
+            raise GenerationError(
+                "Refusing to write outside the project: {0!r} escapes {1}.".format(relative_path, project_root)
+            )
+
+        return target
+
     def _write_file(self, relative_path: str, content: str):
         """
-        Write a file to disk.
+        Write a file to disk, inside the project and nowhere else.
 
         Args:
             relative_path: Path relative to project root
             content: File content
 
         Raises:
-            GenerationError: If write fails
+            GenerationError: If the path escapes the project, or the write fails
         """
-        file_path = self.project_dir / relative_path
+        file_path = self._resolve_inside_project(relative_path)
 
         try:
             # Create parent directories
@@ -228,6 +256,8 @@ Generate the complete, production-ready content for {file_info.path}."""
             with open(file_path, "w") as f:
                 f.write(content)
 
+        except GenerationError:
+            raise
         except Exception as e:
             raise GenerationError(f"Can't write file {relative_path}: {e}")
 

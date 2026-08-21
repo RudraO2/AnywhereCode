@@ -13,11 +13,40 @@ import requests
 
 from anyplace.config.api_manager import APIManager
 from anyplace.cli.error_handler import APIError
+from anyplace.config.providers import needs_api_key
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-provider HTTP helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+#: Where OmniRoute listens once you start it. It is a gateway you run
+#: yourself -- there is no hosted URL to point at.
+OMNIROUTE_DEFAULT_URL = "http://localhost:20128/v1"
+
+
+#: Anthropic model families that removed the sampling parameters
+#: (``temperature``, ``top_p``, ``top_k``). Sending ``temperature`` to one of
+#: these is a 400 from the API, not a warning that can be ignored -- so the
+#: parameter has to be left out of the request body entirely.
+NO_SAMPLING_PARAMS = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+)
+
+
+def supports_sampling(model: str) -> bool:
+    """Does this Anthropic model still accept ``temperature``?"""
+    name = (model or "").strip().lower()
+    # OpenRouter-style "anthropic/claude-..." ids name the same models.
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    return not name.startswith(NO_SAMPLING_PARAMS)
+
 
 def _call_claude(
     api_key: str,
@@ -43,9 +72,10 @@ def _call_claude(
     body: Dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         "messages": user_messages,
     }
+    if supports_sampling(model):
+        body["temperature"] = temperature
     if sys_prompt:
         body["system"] = sys_prompt
 
@@ -125,10 +155,11 @@ def _call_openai_compat(
     """Call any OpenAI-compatible endpoint (OpenRouter, custom, etc.)."""
     url = f"{base_url.rstrip('/')}/chat/completions"
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    # A local gateway needs no auth. Sending "Bearer " with nothing after it
+    # makes some servers reject the request outright, so omit it entirely.
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     if extra_headers:
         headers.update(extra_headers)
 
@@ -177,15 +208,15 @@ class LLMProvider:
         if not config:
             raise APIError("No LLM provider configured. Run: anyplace configure")
 
-        self.api_key = config.get("api_key", "")
-        if not self.api_key:
+        self.api_key = config.get("api_key", "") or ""
+        if not self.api_key and needs_api_key(provider_name):
             raise APIError(f"No API key for {provider_name}")
 
         self.provider = provider_name
         self.base_url: Optional[str] = None
 
         if provider_name == "claude":
-            self.model = config.get("model", "claude-3-5-sonnet-20241022")
+            self.model = config.get("model", "claude-opus-5")
 
         elif provider_name == "gemini":
             model_name = config.get("model", "gemini-2.0-flash")
@@ -195,8 +226,15 @@ class LLMProvider:
             self.model = model_name
 
         elif provider_name == "openrouter":
-            self.model = config.get("model", "anthropic/claude-3.5-sonnet")
+            self.model = config.get("model", "anthropic/claude-sonnet-5")
             self.base_url = "https://openrouter.ai/api/v1"
+
+        elif provider_name == "omniroute":
+            # OmniRoute routes to whichever providers it has configured, so
+            # "auto" lets it pick rather than us guessing a model name that
+            # may not be in this user's pool.
+            self.model = config.get("model", "auto")
+            self.base_url = config.get("base_url", OMNIROUTE_DEFAULT_URL)
 
         elif provider_name == "custom":
             self.model = config.get("model", "custom-model")
@@ -228,7 +266,7 @@ class LLMProvider:
                 response_schema=response_schema,
             )
 
-        # OpenRouter or custom — both are OpenAI-compatible
+        # OpenRouter, OmniRoute and custom are all OpenAI-compatible
         extra = (
             {"HTTP-Referer": "https://github.com/rudrao2/anywhereCode",
              "X-Title": "AnywhereCode"}
@@ -413,25 +451,58 @@ class LLMProvider:
                 except (json.JSONDecodeError, IndexError):
                     pass
 
-        # Strategy 3: find the first '{' and walk to its matching '}'
+        # Strategy 3: walk from each '{' to its matching '}'.
+        #
+        # The brace counting has to know about string literals: a model that
+        # writes {"note": "use } carefully"} would otherwise close the object at
+        # the brace inside the string and produce garbage.
         for start_idx, ch in enumerate(response):
             if ch != "{":
                 continue
-            depth = 0
-            for end_idx in range(start_idx, len(response)):
-                if response[end_idx] == "{":
-                    depth += 1
-                elif response[end_idx] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            candidate = response[start_idx:end_idx + 1]
-                            result = self._as_dict(json.loads(candidate))
-                            if result:
-                                return result
-                        except json.JSONDecodeError:
-                            pass
-                        break  # Move on to next '{'
+
+            end_idx = self._matching_brace(response, start_idx)
+            if end_idx is None:
+                continue
+
+            try:
+                result = self._as_dict(json.loads(response[start_idx : end_idx + 1]))
+            except json.JSONDecodeError:
+                continue
+
+            # `is not None` rather than truthiness: {} is a valid parse and
+            # discarding it sends the caller down the retry path for nothing.
+            if result is not None:
+                return result
+
+        return None
+
+    @staticmethod
+    def _matching_brace(text: str, start: int) -> Optional[int]:
+        """Index of the '}' that closes the '{' at `start`, ignoring braces inside strings."""
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for index in range(start, len(text)):
+            char = text[index]
+
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return index
 
         return None
 
@@ -439,9 +510,9 @@ class LLMProvider:
         """Return known model IDs for the active provider."""
         models = {
             "claude": [
-                "claude-3-5-sonnet-20241022",
-                "claude-3-5-haiku-20241022",
-                "claude-3-opus-20250219",
+                "claude-opus-5",
+                "claude-sonnet-5",
+                "claude-haiku-4-5",
             ],
             "gemini": [
                 "gemini-2.0-flash",
@@ -449,9 +520,15 @@ class LLMProvider:
                 "gemini-1.5-pro",
             ],
             "openrouter": [
-                "anthropic/claude-3.5-sonnet",
+                "anthropic/claude-sonnet-5",
                 "google/gemini-2.0-flash-exp",
                 "mistralai/mistral-large",
+            ],
+            "omniroute": [
+                "auto",
+                "openai/gpt-oss-120b",
+                "google/gemini-2.0-flash",
+                "anthropic/claude-sonnet-5",
             ],
             "custom": ["your-custom-model"],
         }

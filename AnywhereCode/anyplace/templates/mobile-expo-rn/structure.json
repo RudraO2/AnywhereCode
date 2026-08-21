@@ -2,7 +2,11 @@
   "name": "mobile-expo-rn",
   "type": "mobile",
   "description": "Cross-platform mobile app with React Native & Expo",
-  "tech_stack": ["React Native", "Expo", "TypeScript"],
+  "tech_stack": [
+    "React Native",
+    "Expo",
+    "TypeScript"
+  ],
   "files_to_generate": [
     "app.json",
     "eas.json",
@@ -18,5 +22,36 @@
     "Hot reload during development",
     "Native performance"
   ],
-  "estimated_time": "15 minutes"
+  "estimated_time": "15 minutes",
+  "keywords": [
+    "mobile",
+    "app",
+    "phone",
+    "android",
+    "ios",
+    "react native",
+    "expo",
+    "cross platform",
+    "native",
+    "eas",
+    "offline",
+    "camera",
+    "push notifications",
+    "typescript"
+  ],
+  "display_name": "Expo mobile app",
+  "tagline": "One app for iPhone and Android",
+  "good_for": [
+    "phone apps",
+    "trackers and daily loggers",
+    "offline-first tools",
+    "iOS and Android at once"
+  ],
+  "not_for": [
+    "websites",
+    "building without a cloud service"
+  ],
+  "mobile_friendly": false,
+  "runs_on_phone": "Edit on the phone; EAS or a desktop builds it",
+  "difficulty": "advanced"
 }

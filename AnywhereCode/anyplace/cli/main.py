@@ -1,994 +1,861 @@
 """
-AnywhereCode CLI - Main interface.
+Command line entry point for Anywhere Code.
 
-Interactive CLI for generating projects with AI guidance.
+Typing `anywhere` with no arguments opens the interactive shell. Every screen in
+that shell is also a plain subcommand, so anything you can tap you can also
+script.
 """
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Optional
 
 import click
-from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
-from pathlib import Path
 
-from anyplace.config.environment import get_platform_info, get_projects_dir
-from anyplace.config.api_manager import APIManager
-from anyplace.cli.error_handler import handle_error, exit_with_error, ConfigError, GenerationError, APIError
-from anyplace.cli.config_wizard import configure_providers
-from anyplace.cli.templates import list_available_templates, get_template_info
-from anyplace.core.plan_generator import PlanGenerator
-from anyplace.core.llm_provider import LLMProvider
-from anyplace.core.build_orchestrator import BuildOrchestrator
-from anyplace.cli.plan_preview import show_plan_approval_screen, display_plan_error
-from anyplace.cli.progress import GenerationProgress
-from anyplace.core.commit_generator import CommitGenerator
-from anyplace.core.build_runner import BuildRunner
-from anyplace.core.deploy_generator import DeployGenerator
-from anyplace.core.ci_generator import CIGenerator
-from anyplace.core.docker_generator import DockerGenerator
-from anyplace.core.env_manager import EnvManager
-from anyplace.core.guide_generator import GuideGenerator
-from anyplace.core.doc_generator import DocGenerator
-
-console = Console()
+from anyplace import DESCRIPTION, NAME, TAGLINE, __version__
+from anyplace.cli.error_handler import (
+    APIError,
+    ConfigError,
+    GenerationError,
+    exit_with_error,
+    handle_error,
+)
+from anyplace.ui.layout import Layout
+from anyplace.ui.theme import get_theme
 
 
-def _show_pipeline_results(result):
-    """Display the agentic pipeline results in a nice table."""
-    from rich.table import Table
-
-    console.print("\n[bold cyan]⚡ Agentic Pipeline Results[/bold cyan]\n")
-
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Step", style="bold")
-    table.add_column("Status")
-    table.add_column("Detail", style="dim")
-
-    for step in result.summary["steps"]:
-        name = step["name"]
-        status = step["status"]
-        detail = step["detail"]
-
-        if status == "pass":
-            status_str = "[bold green]✅ Done[/bold green]"
-        elif status == "skipped":
-            status_str = "[yellow]⏭ Skipped[/yellow]"
-        else:
-            status_str = "[bold red]❌ Failed[/bold red]"
-
-        table.add_row(name, status_str, detail[:80] if detail else "")
-
-    console.print(table)
-
-    passed = result.summary["passed"]
-    total = result.summary["total_steps"]
-    skipped = result.summary["skipped"]
-    failed = result.summary["failed"]
-
-    if failed == 0:
-        console.print(f"\n[bold green]🎉 All done! {passed} passed, {skipped} skipped.[/bold green]")
-        console.print(f"[bold]Your project is ready at:[/bold] {result.project_dir}")
-        console.print("\n[bold cyan]What was done automatically:[/bold cyan]")
-        console.print("  - Dependencies installed")
-        console.print("  - Project built")
-        console.print("  - Environment configured (.env)")
-        console.print("  - CI/CD pipeline generated (GitHub Actions)")
-        console.print("  - Docker config generated")
-        console.print("  - Deployment config generated")
-        console.print("  - Everything committed to git")
-
-        # Show server info if running
-        server_url = result.summary.get("server_url", "")
-        if server_url:
-            console.print(f"\n[bold green]🌐 Dev server running at:[/bold green] [bold]{server_url}[/bold]")
-            console.print("[dim]Press Ctrl+C to stop the server[/dim]")
-        else:
-            console.print(f"\n[bold]To start developing:[/bold]")
-            console.print(f"  cd {result.project_dir}")
-    else:
-        console.print(f"\n[yellow]⚠️ {passed} passed, {skipped} skipped, {failed} failed[/yellow]")
-        console.print("[dim]Some steps failed but your project files are generated.[/dim]")
-        console.print(f"\nProject at: {result.project_dir}")
-
-
-# ASCII Art
-BANNER = """
-    _   _ ___   _   _ ___ _______ ____  _____  ______
-   | | | |   \\ | \\ | |   \\  | |  | |  | | |___ |  __  \\
-   | |_| | |\\ \\|  \\| | |\\ \\ | |  | |  | | |___ |  |__) |
-   |   \\ | | \\ |  \\ | | |\\ \\| |  | |  | |     |  __  /
-   | |\\ \\| |  \\| |\\ |  |  \\  |  | |__| | ___  | | \\ \\
-   |_| \\_\\|_|  \\|_| \\|__|   \\_\\____\\___/  |__| |_|  \\_\\
-
-Code Anywhere - Code Anytime
-AI-Powered Project Generation for Mobile & Desktop
-"""
-
-
-@click.group()
-def cli():
-    """AnywhereCode - Generate projects anywhere, anytime."""
-    pass
-
-
-def _show_existing_project_menu():
+def _console(layout: Optional[Layout] = None):
     """
-    Let the user pick an existing project and show available actions.
-    Returns True if handled, False if user wants to go back.
+    A console that renders at the width the app has decided on.
+
+    Rich detects its own width, which is *not* the same number: ANYWHERE_WIDTH
+    (documented for users whose Termux font reports nonsense) is invisible to
+    it. Leaving them to disagree meant a 60-column layout being padded out to
+    rich's 80, so tables ran off the side of the screen -- for exactly the
+    users who set the variable to stop that happening.
+
+    Layout is the single source of truth; the console follows it.
     """
-    from pathlib import Path
-    projects_dir = get_projects_dir()
+    from rich.console import Console
 
-    # Collect existing projects (any directory inside projects_dir)
-    if not projects_dir.exists():
-        console.print("[yellow]No projects directory found yet.[/yellow]")
-        return False
+    layout = layout or Layout.detect()
+    return Console(width=layout.width, no_color=not layout.color)
 
-    projects = [p for p in sorted(projects_dir.iterdir()) if p.is_dir()]
 
-    if not projects:
-        console.print("[yellow]No existing projects found in:[/yellow]")
-        console.print(f"  {projects_dir}")
-        return False
+def _ctx(width: Optional[int] = None):
+    """Console + layout, resolved once per command, always in agreement."""
+    layout = Layout.detect(width=width)
+    return _console(layout), layout
 
-    console.print("[bold cyan]📁 Your Existing Projects:[/bold cyan]\n")
-    for i, p in enumerate(projects, 1):
-        # Quick status: does it have .git?
-        git_mark = "🔀" if (p / ".git").exists() else "  "
-        # Count generated source files (rough estimate)
-        try:
-            file_count = sum(1 for _ in p.rglob("*") if _.is_file()
-                             and not any(part.startswith(".") for part in _.parts[-3:])
-                             and "node_modules" not in str(_))
-        except Exception:
-            file_count = 0
-        console.print(f"  {i}. {git_mark} [bold]{p.name}[/bold]  [dim]({file_count} files)[/dim]")
 
-    console.print(f"\n  0. ← Back to main menu")
-    choice = click.prompt("\nSelect project (number)", type=int, default=0)
+dir_option = click.option(
+    "--dir",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False),
+    default=".",
+    show_default=True,
+    help="Project directory to work in.",
+)
 
-    if choice == 0 or choice > len(projects):
-        return False
 
-    project = projects[choice - 1]
-    console.print(f"\n[bold green]📂 {project.name}[/bold green] — {project}\n")
+#: `anywhere --help` groups commands by what the user is trying to do, rather
+#: than listing 20-odd names alphabetically. Order here is the order shown.
+#: Anything not listed falls into "More" automatically, so adding a command
+#: never silently drops it from the help.
+COMMAND_GROUPS = (
+    ("Start here", ("start", "new", "recipes", "templates", "open")),
+    ("Work on a project", ("run", "build", "commit", "explain", "guide", "docs")),
+    ("Ship it", ("deploy", "ci", "docker", "env")),
+    ("Setup", ("configure", "doctor", "test-providers", "info", "reset")),
+)
 
-    # Show what you can do
-    actions = [
-        ("commit",  "anyplace commit --dir",  "Generate AI commit message & commit"),
-        ("build",   "anyplace build --dir",   "Run the project build"),
-        ("deploy",  "anyplace deploy --dir",  "Generate deployment config"),
-        ("ci",      "anyplace ci --dir",      "Add CI/CD pipeline"),
-        ("docker",  "anyplace docker --dir",  "Add Docker config"),
-        ("env",     "anyplace env --dir",     "Manage environment variables"),
-        ("guide",   "anyplace guide --dir",   "Open learning guide"),
-        ("docs",    "anyplace docs --dir",    "Generate documentation"),
-        ("explain", "anyplace explain",       "Explain a file with AI"),
-    ]
 
-    console.print("[bold cyan]What do you want to do?[/bold cyan]\n")
-    for i, (cmd, _, desc) in enumerate(actions, 1):
-        console.print(f"  {i}. [bold]{cmd}[/bold] — {desc}")
-    console.print(f"\n  0. ← Back")
+def _render_sections(sections) -> str:
+    """
+    Render `(heading, [(name, description), ...])` pairs as help text.
 
-    action_choice = click.prompt("\nChoose action (number)", type=int, default=0)
-    if action_choice == 0 or action_choice > len(actions):
-        return True  # Handled (went back)
+    Click's built-in definition list is a two-column table: on a phone the
+    name column eats most of the width and every description is truncated to
+    "Build the project...", or -- for options, whose names are longer -- simply
+    overflows the screen. Below a usable width we stack instead: name on its
+    own line, description wrapped beneath.
 
-    cmd_name, _, _ = actions[action_choice - 1]
-    dir_str = str(project)
+    Rendered through rich but returned as text, so callers can hand it to
+    click's formatter and keep it in the right place relative to the usage
+    block click writes itself.
+    """
+    import io
 
-    # Dispatch to the right command
-    import subprocess, sys
-    extra = []
-    if cmd_name == "explain":
-        filename = click.prompt("  File to explain (relative path)")
-        extra = [filename]
+    from rich.console import Console
 
-    console.print(f"\n[dim]Running: anyplace {cmd_name} {' '.join(extra)} --dir \"{dir_str}\"[/dim]\n")
-    subprocess.run(
-        ["anyplace", cmd_name, *extra, "--dir", dir_str],
-        check=False,
+    stdout, layout = _ctx()
+    theme = get_theme()
+    from anyplace.ui import components as ui
+
+    sections = [(h, rows) for h, rows in sections if rows]
+    if not sections:
+        return ""
+
+    buffer = Console(
+        file=io.StringIO(),
+        width=layout.width,
+        force_terminal=stdout.is_terminal,
+        no_color=not layout.color,
+        highlight=False,
+        soft_wrap=True,
     )
-    return True
+
+    # Two columns only when the widest name still leaves room to read.
+    widest = max(len(name) for _, rows in sections for name, _ in rows)
+    stacked = layout.narrow or (layout.body_width - widest - 4) < 24
+
+    for heading, rows in sections:
+        buffer.print()
+        buffer.print(heading + ":", style=theme.style("accent"))
+        for name, help_text in rows:
+            if stacked:
+                buffer.print("  " + name, style=theme.style("value"))
+                if help_text:
+                    buffer.print(
+                        ui.wrap(help_text, max(12, layout.body_width - 4), indent="    "),
+                        style=theme.style("muted"),
+                    )
+            else:
+                pad = " " * (widest + 4)
+                body = ui.wrap(
+                    help_text, max(12, layout.body_width - widest - 4), indent=pad
+                ).lstrip()
+                buffer.print(
+                    "  " + name + " " * (widest - len(name) + 2) + body,
+                    style=theme.style("muted"),
+                )
+
+    return buffer.file.getvalue().rstrip("\n")
+
+
+class NarrowHelp:
+    """Mixin: render the options list so it survives a narrow screen.
+
+    Click reserves a fixed first column for option names like
+    ``--width INTEGER``. Below about 30 columns the help text beside it no
+    longer fits and simply runs off the edge -- on the one command a stuck
+    user is most likely to reach for.
+    """
+
+    def format_options(self, ctx, formatter):
+        records = []
+        for param in self.get_params(ctx):
+            record = param.get_help_record(ctx)
+            if record is not None:
+                records.append(record)
+
+        text = _render_sections([("Options", records)])
+        if text:
+            formatter.write(text)
+
+        # Groups list their subcommands after the options, as click does.
+        commands = getattr(self, "format_commands", None)
+        if commands is not None:
+            commands(ctx, formatter)
+
+
+class AnywhereCommand(NarrowHelp, click.Command):
+    """A subcommand whose --help fits the screen."""
+
+
+class AnywhereGroup(NarrowHelp, click.Group):
+    """A group whose bare invocation opens the interactive shell."""
+
+    #: Subcommands get the same narrow-screen help treatment.
+    command_class = AnywhereCommand
+
+    def resolve_command(self, ctx, args):
+        return super().resolve_command(ctx, args)
+
+    def grouped_commands(self, ctx):
+        """
+        (heading, [(name, short help), ...]) pairs covering every command.
+
+        Commands missing from COMMAND_GROUPS are collected under "More" so a
+        newly added command can never disappear from `--help`.
+        """
+        names = set(self.list_commands(ctx))
+        sections = []
+
+        for heading, wanted in COMMAND_GROUPS:
+            rows = []
+            for name in wanted:
+                if name in names:
+                    names.discard(name)
+                    command = self.get_command(ctx, name)
+                    if command is not None and not command.hidden:
+                        rows.append((name, command.get_short_help_str(limit=200)))
+            if rows:
+                sections.append((heading, rows))
+
+        leftovers = []
+        for name in sorted(names):
+            command = self.get_command(ctx, name)
+            if command is not None and not command.hidden:
+                leftovers.append((name, command.get_short_help_str(limit=200)))
+        if leftovers:
+            sections.append(("More", leftovers))
+
+        return sections
+
+    def format_commands(self, ctx, formatter):
+        """
+        Render the command list so it survives a 40-column screen.
+
+        Click's default is a two-column table: on a phone the name column eats
+        most of the width and every description is truncated to "Build the
+        project...", which tells the reader nothing. On a narrow screen we
+        stack instead -- name on its own line, description wrapped beneath --
+        and fall back to the familiar two-column form when there is room.
+
+        The output is rendered through rich but written into click's own
+        formatter, so it keeps its colours *and* stays in the right place
+        relative to the usage and options blocks click writes itself.
+        """
+        text = _render_sections(self.grouped_commands(ctx))
+        if text:
+            formatter.write(text)
+
+    def format_help(self, ctx, formatter):
+        console, layout = _ctx()
+        from anyplace.ui import components as ui
+
+        ui.banner(console, layout=layout, subtitle=TAGLINE)
+        console.print()
+        console.print(ui.wrap(DESCRIPTION, layout.body_width), style=get_theme().style("muted"))
+        console.print()
+        super().format_help(ctx, formatter)
+
+
+def _click_context_settings():
+    """
+    Make click wrap its own help to the real terminal.
+
+    Click defaults to 80 columns, so on a 40-column phone every command
+    description in `--help` runs off the edge.
+    """
+    width = Layout.detect().width
+    return {
+        "help_option_names": ["-h", "--help"],
+        "max_content_width": width,
+        "terminal_width": width,
+    }
+
+
+@click.group(cls=AnywhereGroup, invoke_without_command=True, context_settings=_click_context_settings())
+@click.option("--auto", "auto_accept", is_flag=True, default=False, help="Don't ask before each pipeline step.")
+@click.option("--width", type=int, default=None, help="Force a terminal width (useful on odd Termux setups).")
+@click.version_option(__version__, "-V", "--version", prog_name=NAME)
+@click.pass_context
+def cli(ctx, auto_accept, width):
+    """Anywhere Code — build and ship from your phone."""
+    ctx.ensure_object(dict)
+    ctx.obj["auto_accept"] = auto_accept
+    ctx.obj["width"] = width
+
+    if ctx.invoked_subcommand is None:
+        ctx.exit(_launch_shell(auto_accept=auto_accept, width=width))
+
+
+def _launch_shell(auto_accept: bool = False, width: Optional[int] = None) -> int:
+    from anyplace.cli.app import App
+
+    console = _console()
+    layout = Layout.detect(width=width)
+    try:
+        return App(console=console, layout=layout, auto_accept=auto_accept).run()
+    except KeyboardInterrupt:
+        console.print()
+        console.print("Bye.", style=get_theme().style("muted"))
+        return 130
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Interactive entry points
+# ─────────────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--auto", "auto_accept", is_flag=True, default=False, help="Don't ask before each pipeline step.")
+def start(auto_accept):
+    """Open the interactive shell (same as running `anywhere` alone)."""
+    sys.exit(_launch_shell(auto_accept=auto_accept))
 
 
 @cli.command()
-@click.option("--auto", "auto_accept", is_flag=True, default=False,
-              help="Auto-accept all pipeline steps (no confirmations)")
-def main(auto_accept):
-    """
-    Interactive mode - Create a new project or continue an existing one.
+@click.option("--auto", "auto_accept", is_flag=True, default=False, help="Don't ask before each pipeline step.")
+def new(auto_accept):
+    """Start a new project — asks what you want, then builds it."""
+    from anyplace.cli import flows
 
-    Guides you through project creation with AI assistance.
-    By default, asks for confirmation before each pipeline step (human-accept mode).
-    Use --auto to run everything without confirmations.
-    """
-    console.clear()
-    console.print(BANNER, style="cyan bold")
+    console, layout = _ctx()
+    try:
+        flows.new_project(console, layout=layout, auto_accept=auto_accept)
+    except (ConfigError, GenerationError, APIError) as exc:
+        exit_with_error(exc, "creating your project", console=console, layout=layout)
+    except KeyboardInterrupt:
+        console.print()
+        console.print("Cancelled.", style=get_theme().style("warn"))
 
-    if auto_accept:
-        console.print("[bold yellow]Mode: AUTO-ACCEPT[/bold yellow] — all steps run without confirmation\n")
-    else:
-        console.print("[dim]Mode: human-accept (you approve each step)[/dim]\n")
 
-    # Check platform
-    platform_info = get_platform_info()
-    if platform_info["is_termux"]:
-        console.print("📱 [bold yellow]Termux Mode[/bold yellow] - Projects will save to ~/Downloads/\n")
-    else:
-        console.print(f"🖥️  Desktop Mode - Projects will save to {get_projects_dir()}\n")
+@cli.command(name="open")
+def open_cmd():
+    """Reopen one of your projects."""
+    from anyplace.cli import flows
 
-    # ── Top-level choice: new project OR continue existing ──────────────────
-    console.print("[bold]What would you like to do?[/bold]")
-    console.print("  1. 🆕 Create a new project")
-    console.print("  2. 📂 Continue an existing project")
-    top_choice = click.prompt("\nChoice", type=click.IntRange(1, 2), default=1)
+    console, layout = _ctx()
+    flows.open_project(console, layout=layout)
 
-    if top_choice == 2:
-        _show_existing_project_menu()
+
+@cli.command()
+def doctor():
+    """Check this device for anything that will get in the way."""
+    from anyplace.cli.doctor_screen import render_report
+    from anyplace.core.doctor import run_all
+
+    console, layout = _ctx()
+    from anyplace.ui import components as ui
+
+    ui.rule(console, "Checking your setup", layout=layout)
+    report = run_all()
+    render_report(console, report, layout=layout)
+    sys.exit(0 if report.healthy else 1)
+
+
+@cli.command()
+@click.option("--tag", default=None, help="Only show one kind of idea.")
+@click.option("--search", "query", default=None, help="Find an idea by name.")
+def recipes(tag, query):
+    """Show the ready-made project ideas you can start from."""
+    from anyplace.core.recipes import list_recipes, search_recipes
+    from anyplace.ui import components as ui
+
+    console, layout = _ctx()
+    found = search_recipes(query) if query else list_recipes(tag=tag)
+
+    if not found:
+        ui.card(console, "Nothing matched.", title="No ideas found", tone="warn", layout=layout)
         return
 
-    try:
-        # Check API configuration
-        api_mgr = APIManager()
-        providers = api_mgr.list_providers()
+    ui.data_table(
+        console,
+        ["Idea", "What it is", "Scaffold"],
+        [[recipe.title, recipe.subtitle, recipe.template] for recipe in found],
+        layout=layout,
+        title="Start from an idea",
+    )
+    console.print()
+    console.print("Run `anywhere new` and pick one.", style=get_theme().style("muted"))
 
-        if not providers:
-            console.print("[bold yellow]⚠️  No LLM provider configured![/bold yellow]")
-            console.print("Let's set up your AI provider...\n")
 
-            if click.confirm("Configure API now?"):
-                configure_providers()
-            else:
-                console.print("[bold red]Can't continue without LLM provider.[/bold red]")
-                console.print("Run: [bold]anyplace configure[/bold] to set up")
-                return
-
-        # Show available templates
-        console.print("[bold cyan]📋 Available Project Templates:[/bold cyan]\n")
-        templates = list_available_templates()
-
-        if not templates:
-            console.print("[bold red]No templates found![/bold red]")
-            return
-
-        for i, template in enumerate(templates, 1):
-            info = get_template_info(template)
-            console.print(
-                f"  {i}. [bold]{template}[/bold] - {info.get('description', 'Project template')}"
-            )
-
-        # Get user selection
-        choice = click.prompt(
-            "\n🎯 Select template (number)",
-            type=click.IntRange(1, len(templates)),
-        )
-        selected_template = templates[choice - 1]
-
-        # Get project name
-        project_name = click.prompt(
-            "\n📁 Project name",
-            default="my-project",
-            type=str
-        )
-
-        # Get description
-        project_desc = click.prompt(
-            "\n📝 Project description (optional)",
-            default="",
-            type=str,
-            show_default=False
-        )
-
-        # Show summary
-        summary = Text()
-        summary.append("Template: ", style="bold")
-        summary.append(f"{selected_template}\n")
-        summary.append("Project: ", style="bold")
-        summary.append(f"{project_name}\n")
-        summary.append("Location: ", style="bold")
-        summary.append(str(get_projects_dir() / project_name))
-
-        console.print(Panel(summary, title="✨ Project Summary", border_style="green"))
-
-        # Generate plan (loop allows retry on GenerationError)
-        while True:
-            try:
-                console.print("\n[bold cyan]🤖 Generating project plan...[/bold cyan]")
-                api_mgr = APIManager()
-                llm = LLMProvider(api_mgr)
-                generator = PlanGenerator(llm)
-
-                plan = generator.generate_plan(
-                    template_name=selected_template,
-                    project_name=project_name,
-                    description=project_desc,
-                )
-
-                console.print("[bold green]✅ Plan generated![/bold green]")
-
-                # Show plan for approval
-                if show_plan_approval_screen(plan):
-                    # Build project — fully agentic
-                    try:
-                        def agent_progress(step: str, msg: str):
-                            """Live feedback from the agentic pipeline."""
-                            console.print(f"  [cyan]⚡ {step}[/cyan] {msg}")
-
-                        orchestrator = BuildOrchestrator(
-                            plan=plan,
-                            llm_provider=llm,
-                            use_git=True,
-                            agentic=True,
-                            human_accept=not auto_accept,
-                        )
-
-                        progress = GenerationProgress(len(plan.files), project_name)
-                        progress.show_generation_start()
-
-                        # Generate + auto-install + auto-build + auto-deploy
-                        success = orchestrator.build(
-                            progress_callback=progress.show_file_progress,
-                            agent_callback=agent_progress,
-                        )
-
-                        if success:
-                            project_info = orchestrator.get_project_info()
-                            progress.show_generation_complete(project_info["project_dir"])
-
-                            # Show agentic pipeline results
-                            if orchestrator.pipeline_result:
-                                _show_pipeline_results(orchestrator.pipeline_result)
-                                # Wait for dev server if running
-                                _wait_for_server(orchestrator.pipeline_result)
-                            else:
-                                # Fallback if agentic mode was off
-                                console.print("\n[bold]Next steps:[/bold]")
-                                for i, step in enumerate(plan.next_steps, 1):
-                                    console.print(f"  {i}. {step}")
-
-                    except (GenerationError, APIError) as e:
-                        progress.show_generation_error(str(e))
-                        if click.confirm("\nKeep generated files for manual review?"):
-                            pass  # Keep files
-                        else:
-                            console.print("[dim]Files cleaned up[/dim]")
-
-                else:
-                    console.print("[yellow]Generation cancelled[/yellow]")
-
-                break  # Done - exit retry loop
-
-            except APIError as e:
-                exit_with_error(e, "Connecting to LLM provider")
-                break
-            except GenerationError as e:
-                display_plan_error(str(e))
-                if click.confirm("\nTry again with different parameters?"):
-                    project_name = click.prompt("\n📁 Project name", default=project_name, type=str)
-                    project_desc = click.prompt("\n📝 Project description (optional)", default=project_desc, type=str, show_default=False)
-                    continue  # Retry
-                break
-            except click.Abort:
-                console.print("[yellow]Cancelled[/yellow]")
-                break
-
-    except ConfigError as e:
-        exit_with_error(e, "Checking configuration")
-    except Exception as e:
-        exit_with_error(e, "Creating project")
-
+# ─────────────────────────────────────────────────────────────────────────
+# Setup and info
+# ─────────────────────────────────────────────────────────────────────────
 
 @cli.command()
 def configure():
-    """Configure LLM providers and API keys."""
-    console.clear()
-    console.print(BANNER, style="cyan bold")
-    console.print("[bold cyan]⚙️  API Configuration[/bold cyan]\n")
+    """Add or change your AI provider and model."""
+    from anyplace.cli.config_wizard import configure_providers
+    from anyplace.ui import components as ui
 
+    console, layout = _ctx()
+    ui.banner(console, layout=layout, subtitle="Set up your AI")
     try:
-        configure_providers()
-        console.print("\n[bold green]✅ Configuration saved![/bold green]")
-    except Exception as e:
-        exit_with_error(e, "Configuration")
+        configure_providers(console=console, layout=layout)
+    except Exception as exc:  # noqa: BLE001
+        exit_with_error(exc, "saving your settings", console=console, layout=layout)
 
 
 @cli.command()
 def templates():
-    """List all available project templates."""
-    console.clear()
-    console.print(BANNER, style="cyan bold")
-    console.print("[bold cyan]📋 Available Templates[/bold cyan]\n")
+    """List the project scaffolds available."""
+    from anyplace.cli.templates import get_template_info, list_available_templates
+    from anyplace.ui import components as ui
 
-    try:
-        available = list_available_templates()
+    console, layout = _ctx()
+    available = list_available_templates()
+    if not available:
+        ui.card(console, "No templates found — try reinstalling.", title="Nothing here", tone="err", layout=layout)
+        return
 
-        if not available:
-            console.print("[yellow]No templates found[/yellow]")
-            return
+    rows = []
+    for name in available:
+        try:
+            info = get_template_info(name)
+        except Exception:
+            continue
+        rows.append(
+            [
+                info.get("display_name") or name,
+                info.get("tagline") or info.get("description", ""),
+                info.get("difficulty", "—"),
+                "yes" if info.get("mobile_friendly", True) else "desktop",
+            ]
+        )
 
-        for template in available:
-            info = get_template_info(template)
-            console.print(f"\n[bold]{template}[/bold]")
-            console.print(f"  {info.get('description', 'N/A')}")
-            if "tech_stack" in info:
-                console.print(f"  Tech: {', '.join(info['tech_stack'])}")
-    except Exception as e:
-        exit_with_error(e, "Listing templates")
+    ui.data_table(console, ["Scaffold", "What it's for", "Level", "On a phone"], rows, layout=layout, title="Scaffolds")
 
 
 @cli.command()
 def info():
-    """Show platform and configuration information."""
-    console.clear()
-    console.print(BANNER, style="cyan bold")
-    console.print("[bold cyan]ℹ️  System Information[/bold cyan]\n")
+    """Show what this device looks like to Anywhere Code."""
+    from anyplace.config.api_manager import APIManager
+    from anyplace.config.environment import get_platform_info
+    from anyplace.ui import components as ui
 
-    try:
-        platform_info = get_platform_info()
+    console, layout = _ctx()
+    platform_info = get_platform_info()
 
-        # Platform info
-        panel_text = Text()
-        panel_text.append("Platform: ", style="bold")
-        panel_text.append(f"{platform_info['system']} ({platform_info['machine']})\n")
-        panel_text.append("Release: ", style="bold")
-        panel_text.append(f"{platform_info['release']}\n")
-        panel_text.append("Mode: ", style="bold")
-        mode = "🤖 Termux/Android" if platform_info["is_termux"] else "🖥️  Desktop"
-        panel_text.append(f"{mode}\n")
-        panel_text.append("Projects Dir: ", style="bold")
-        panel_text.append(f"{platform_info['projects_dir']}\n")
-        panel_text.append("Config Dir: ", style="bold")
-        panel_text.append(f"{platform_info['config_dir']}")
+    ui.banner(console, layout=layout, subtitle=TAGLINE)
+    ui.kv(
+        console,
+        [
+            ("Version", __version__),
+            ("System", "{0} ({1})".format(platform_info["system"], platform_info["machine"])),
+            ("Mode", "Termux / Android" if platform_info["is_termux"] else "Desktop"),
+            ("Terminal", "{0}x{1} ({2})".format(layout.width, layout.height, layout.bp)),
+            ("Projects", platform_info["projects_dir"]),
+            ("Config", platform_info["config_dir"]),
+        ],
+        layout=layout,
+        title="This device",
+    )
 
-        console.print(Panel(panel_text, title="System Info", border_style="blue"))
-
-        # API configuration
-        api_mgr = APIManager()
-        providers = api_mgr.list_providers()
-
-        console.print("\n[bold cyan]Configured Providers:[/bold cyan]")
-        if providers:
-            for provider, config in providers.items():
-                model = config.get("model", "N/A")
-                console.print(f"  • {provider.upper()}: {model}")
-        else:
-            console.print("  [yellow]No providers configured[/yellow]")
-            console.print("  Run: [bold]anyplace configure[/bold] to set up")
-
-    except Exception as e:
-        exit_with_error(e, "Getting system info")
+    api_mgr = APIManager()
+    providers = api_mgr.list_providers()
+    console.print()
+    if providers:
+        active = api_mgr.get_active_provider()
+        rows = [
+            [name, config.get("model", "?"), "default" if name == active else ""]
+            for name, config in providers.items()
+        ]
+        ui.data_table(console, ["Provider", "Model", ""], rows, layout=layout, title="AI providers")
+    else:
+        ui.card(console, "No AI provider yet.\nRun: anywhere configure", title="AI providers", tone="warn", layout=layout)
 
 
-@cli.command()
-def reset():
-    """Reset all configurations."""
-    if click.confirm("⚠️  This will delete ALL configurations. Continue?"):
-        try:
-            api_mgr = APIManager()
-            api_mgr.reset_config()
-            console.print("[bold green]✅ Configuration reset[/bold green]")
-        except Exception as e:
-            exit_with_error(e, "Resetting configuration")
-
-
-@cli.command()
+@cli.command(name="test-providers")
 def test_providers():
-    """Test LLM provider connectivity."""
-    console.clear()
-    console.print(BANNER, style="cyan bold")
-    console.print("[bold cyan]🧪 Testing API Connections[/bold cyan]\n")
+    """Check that your API keys actually work."""
+    from anyplace.cli.config_wizard import test_provider
+    from anyplace.config.api_manager import APIManager
+    from anyplace.ui import components as ui
 
-    try:
-        api_mgr = APIManager()
-        providers = api_mgr.list_providers()
+    console, layout = _ctx()
+    api_mgr = APIManager()
+    providers = api_mgr.list_providers()
 
-        if not providers:
-            console.print("[yellow]⚠️  No providers configured[/yellow]")
-            console.print("Run: [bold]anyplace configure[/bold] to set up\n")
-            return
+    if not providers:
+        ui.card(console, "Nothing to test.\nRun: anywhere configure", title="No providers", tone="warn", layout=layout)
+        return
 
-        all_ok = True
-
-        for provider_name in providers:
-            config = api_mgr.get_provider(provider_name)
-            model = config.get("model", "unknown")
-
-            console.print(f"Testing {provider_name.upper()} ({model})... ", end="", flush=True)
-
-            try:
-                llm = LLMProvider(api_mgr)
-                if llm.test_connection():
-                    console.print("[green]✅ OK[/green]")
-                else:
-                    console.print("[yellow]⚠️  Connection test returned unexpected result[/yellow]")
-                    all_ok = False
-            except (APIError, ConfigError) as e:
-                console.print(f"[red]❌ Failed[/red]")
-                console.print(f"   Error: {e}\n")
-                all_ok = False
-
-        if all_ok:
-            console.print("\n[bold green]✅ All providers working![/bold green]")
-        else:
-            console.print("\n[bold yellow]⚠️  Some providers failed. Check your API keys.[/bold yellow]")
-
-    except Exception as e:
-        exit_with_error(e, "Testing providers")
+    results = [test_provider(console, api_mgr, name, layout=layout) for name in providers]
+    console.print()
+    if all(results):
+        ui.card(console, "Every provider answered.", title="All good", tone="ok", layout=layout)
+    else:
+        ui.card(console, "At least one provider failed — see above.", title="Some failed", tone="warn", layout=layout)
+        sys.exit(1)
 
 
 @cli.command()
-@click.option("--all", "-a", "stage_all", is_flag=True, default=False,
-              help="Stage all changes before committing")
-@click.option("--dry-run", is_flag=True, default=False,
-              help="Show generated message without committing")
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
-def commit(stage_all, dry_run, project_dir):
-    """Generate a smart AI commit message and commit staged changes."""
-    from pathlib import Path
+@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation.")
+def reset(yes):
+    """Forget your API keys and settings."""
+    from anyplace.config.api_manager import APIManager
+    from anyplace.core.session import SessionStore
+    from anyplace.ui import components as ui
+    from anyplace.ui.prompts import confirm_danger
 
+    console, layout = _ctx()
+    if not yes and not confirm_danger(console, "Delete all saved keys and settings?", layout=layout):
+        console.print("Left everything alone.", style=get_theme().style("muted"))
+        return
+
+    APIManager().reset_config()
+    SessionStore().clear()
+    ui.card(console, "Settings cleared. Your projects are untouched.", title="Reset", tone="ok", layout=layout)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Project commands
+# ─────────────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--all", "-a", "stage_all", is_flag=True, default=False, help="Stage everything first.")
+@click.option("--dry-run", is_flag=True, default=False, help="Show the message, don't commit.")
+@dir_option
+def commit(stage_all, dry_run, project_dir):
+    """Write a commit message from your changes, then commit."""
+    import subprocess
+
+    from anyplace.cli import flows
+    from anyplace.config.api_manager import APIManager
+    from anyplace.core.commit_generator import CommitGenerator
+    from anyplace.core.llm_provider import LLMProvider
+    from anyplace.ui import components as ui
+    from anyplace.ui.prompts import ask_yes_no
+
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
 
     if not (path / ".git").exists():
-        console.print(f"[bold red]Not a git repository:[/bold red] {path}")
-        console.print("Run [bold]git init[/bold] first.")
-        return
+        ui.card(console, "{0}\nisn't a git repository.\n\nRun: git init".format(path), title="No repo", tone="err", layout=layout)
+        sys.exit(1)
 
     try:
-        api_mgr = APIManager()
-        llm = LLMProvider(api_mgr)
+        llm = LLMProvider(APIManager())
         commit_gen = CommitGenerator(llm)
 
         if stage_all:
-            console.print("[dim]Staging all changes...[/dim]")
+            subprocess.run(["git", "add", "-A"], cwd=str(path), check=True)
 
-        diff = commit_gen.get_staged_diff(path) if not stage_all else commit_gen.get_unstaged_diff(path)
-
-        if not diff.strip() and not stage_all:
-            console.print("[yellow]No staged changes. Use [bold]-a[/bold] to stage everything.[/yellow]")
+        diff = commit_gen.get_staged_diff(path)
+        if not diff.strip():
+            ui.card(console, "Nothing staged.\n\nUse -a to stage everything.", title="No changes", tone="warn", layout=layout)
             return
 
-        console.print("\n[bold cyan]🤖 Generating commit message...[/bold cyan]")
-        message = commit_gen.generate_message(diff) if not stage_all else None
-
-        if stage_all:
-            import subprocess
-            subprocess.run(["git", "add", "-A"], cwd=path, check=True)
-            diff = commit_gen.get_staged_diff(path)
+        with flows.thinking(console, "Reading your changes…", layout):
             message = commit_gen.generate_message(diff)
 
-        from rich.panel import Panel
-        console.print(Panel(message, title="📝 Proposed Commit Message", border_style="green"))
+        ui.card(console, message, title="Proposed message", tone="info", layout=layout)
 
         if dry_run:
-            console.print("[dim]Dry run - no commit made[/dim]")
+            console.print("Dry run — nothing committed.", style=get_theme().style("muted"))
             return
 
-        if click.confirm("Commit with this message?"):
-            import subprocess
-            result = subprocess.run(
-                ["git", "commit", "-m", message],
-                cwd=path,
-                capture_output=True,
-                text=True,
-            )
+        if ask_yes_no(console, "Commit with this?", default=True, layout=layout):
+            result = subprocess.run(["git", "commit", "-m", message], cwd=str(path), capture_output=True, text=True)
             if result.returncode == 0:
-                console.print("[bold green]✅ Committed![/bold green]")
+                ui.card(console, "Committed.", title="Done", tone="ok", layout=layout)
             else:
-                console.print(f"[bold red]Commit failed:[/bold red] {result.stderr.strip()}")
+                ui.card(console, result.stderr.strip(), title="Commit failed", tone="err", layout=layout)
+                sys.exit(1)
 
-    except (GenerationError, APIError) as e:
-        exit_with_error(e, "Generating commit message")
-    except ConfigError as e:
-        exit_with_error(e, "Checking configuration")
+    except (GenerationError, APIError, ConfigError) as exc:
+        exit_with_error(exc, "writing your commit message", console=console, layout=layout)
 
 
 @cli.command()
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
-@click.option("--install", is_flag=True, default=False,
-              help="Run npm install before building")
+@dir_option
+@click.option("--install", is_flag=True, default=False, help="Install dependencies first.")
 def build(project_dir, install):
-    """Detect project type and run the appropriate build command."""
-    from pathlib import Path
+    """Build the project in this directory."""
+    import subprocess
 
+    from anyplace.core.build_runner import BuildRunner
+    from anyplace.ui import components as ui
+
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
     runner = BuildRunner(path)
-    project_type = runner._detect_project_type()
 
-    console.print(f"[bold cyan]🔍 Detected project type:[/bold cyan] [bold]{project_type}[/bold]")
+    ui.kv(console, [("Project", path.name), ("Type", runner._detect_project_type())], layout=layout, title="Building")
 
     try:
         if install:
-            console.print("[bold cyan]📦 Installing dependencies...[/bold cyan]")
-            import subprocess
-            result = subprocess.run(
-                runner.get_install_command(),
-                cwd=path,
-                capture_output=False,
-            )
-            if result.returncode != 0:
-                console.print("[bold red]Install failed[/bold red]")
-                return
+            console.print("Installing dependencies…", style=get_theme().style("accent"))
+            if subprocess.run(runner.get_install_command(), cwd=str(path)).returncode != 0:
+                ui.card(console, "Install failed — build not attempted.", title="Stopped", tone="err", layout=layout)
+                sys.exit(1)
 
-        console.print(f"[bold cyan]🔨 Running build...[/bold cyan]")
-        success = runner.run_build(progress_callback=lambda line: console.print(f"  [dim]{line}[/dim]"))
-
-        if success:
-            console.print("[bold green]✅ Build complete![/bold green]")
-
-    except GenerationError as e:
-        exit_with_error(e, "Building project")
+        ok = runner.run_build(progress_callback=lambda line: console.print("  " + line, style=get_theme().style("dim_rule")))
+        if ok:
+            ui.card(console, "Build finished.", title="Done", tone="ok", layout=layout)
+        else:
+            ui.card(console, "Build failed — see the output above.", title="Failed", tone="err", layout=layout)
+            sys.exit(1)
+    except GenerationError as exc:
+        exit_with_error(exc, "building", console=console, layout=layout)
 
 
 @cli.command()
-@click.option("--target", type=click.Choice(["eas", "github", "auto"]),
-              default="auto", show_default=True, help="Deploy target")
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
+@click.option("--target", type=click.Choice(["eas", "github", "auto"]), default="auto", show_default=True)
+@dir_option
 def deploy(target, project_dir):
-    """Generate deployment configuration (EAS, GitHub Actions, etc.)."""
-    from pathlib import Path
+    """Generate deployment config for this project."""
+    from anyplace.config.api_manager import APIManager
+    from anyplace.core.build_runner import BuildRunner
+    from anyplace.core.deploy_generator import DeployGenerator
+    from anyplace.core.llm_provider import LLMProvider
+    from anyplace.ui import components as ui
 
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
-    runner = BuildRunner(path)
-    project_type = runner._detect_project_type()
+    project_type = BuildRunner(path)._detect_project_type()
 
-    # Auto-select target based on project type
     if target == "auto":
         target = "eas" if project_type == "expo-rn" else "github"
 
-    console.print(f"[bold cyan]🚀 Generating deploy config[/bold cyan] → [bold]{target}[/bold]")
-
     try:
-        api_mgr = APIManager()
-        llm = LLMProvider(api_mgr)
-        deploy_gen = DeployGenerator(path, llm)
-
-        result = deploy_gen.deploy(target)
-
-        console.print("\n[bold green]✅ Deploy config generated![/bold green]")
-        console.print("\n[bold]Files written:[/bold]")
-        for f in result["files_written"]:
-            console.print(f"  📄 {f}")
-
-        console.print("\n[bold]Next steps:[/bold]")
-        for i, step in enumerate(result["next_steps"], 1):
-            console.print(f"  {i}. {step}")
-
-    except GenerationError as e:
-        exit_with_error(e, "Generating deploy config")
-    except (APIError, ConfigError) as e:
-        exit_with_error(e, "Checking configuration")
+        result = DeployGenerator(path, LLMProvider(APIManager())).deploy(target)
+        ui.kv(console, [("Target", target), ("Type", project_type)], layout=layout, title="Deployment")
+        console.print()
+        for written in result["files_written"]:
+            console.print("  " + written, style=get_theme().style("key"))
+        console.print()
+        for index, step in enumerate(result["next_steps"], 1):
+            console.print(ui.wrap("  {0}. {1}".format(index, step), layout.body_width, indent="     "))
+    except (GenerationError, APIError, ConfigError) as exc:
+        exit_with_error(exc, "generating deployment config", console=console, layout=layout)
 
 
 @cli.command()
-@click.option(
-    "--platform",
-    type=click.Choice(["github", "gitlab", "bitbucket", "circle"]),
-    default="github",
-    show_default=True,
-    help="CI/CD platform to generate config for",
-)
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
+@click.option("--platform", type=click.Choice(["github", "gitlab", "bitbucket", "circle"]), default="github", show_default=True)
+@dir_option
 def ci(platform, project_dir):
-    """Generate CI/CD pipeline configuration."""
-    from pathlib import Path
+    """Add a CI pipeline to this project."""
+    from anyplace.core.ci_generator import CIGenerator
+    from anyplace.ui import components as ui
 
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
     generator = CIGenerator(path)
 
-    console.print(f"[bold cyan]⚙️  Generating {platform} CI/CD config...[/bold cyan]")
-    console.print(f"   Detected project type: [bold]{generator.project_type}[/bold]")
-
     try:
         files = generator.generate(platform)
-        console.print(f"\n[bold green]✅ CI/CD config generated![/bold green]")
+        ui.kv(console, [("Platform", platform), ("Type", generator.project_type)], layout=layout, title="CI")
         for rel_path in files:
-            console.print(f"  📄 {rel_path}")
-    except GenerationError as e:
-        exit_with_error(e, "Generating CI/CD config")
+            console.print("  " + str(rel_path), style=get_theme().style("key"))
+    except GenerationError as exc:
+        exit_with_error(exc, "generating CI config", console=console, layout=layout)
 
 
 @cli.command()
-@click.option(
-    "--type", "docker_type",
-    type=click.Choice(["dockerfile", "compose", "all"]),
-    default="all",
-    show_default=True,
-    help="Which Docker files to generate",
-)
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
+@click.option("--type", "docker_type", type=click.Choice(["dockerfile", "compose", "all"]), default="all", show_default=True)
+@dir_option
 def docker(docker_type, project_dir):
-    """Generate Docker and docker-compose configuration."""
-    from pathlib import Path
+    """Add Docker config to this project."""
+    from anyplace.core.docker_generator import DockerGenerator
+    from anyplace.ui import components as ui
 
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
     generator = DockerGenerator(path)
 
-    console.print(f"[bold cyan]🐳 Generating Docker config ({docker_type})...[/bold cyan]")
-    console.print(f"   Detected project type: [bold]{generator.project_type}[/bold]")
-
     try:
         files = generator.generate(docker_type)
-        console.print(f"\n[bold green]✅ Docker config generated![/bold green]")
+        ui.kv(console, [("Type", generator.project_type)], layout=layout, title="Docker")
         for rel_path in files:
-            console.print(f"  📄 {rel_path}")
-
-        console.print("\n[bold]Next steps:[/bold]")
-        console.print("  1. Review the generated Dockerfile and docker-compose.yml")
-        console.print("  2. docker compose up --build")
-    except GenerationError as e:
-        exit_with_error(e, "Generating Docker config")
+            console.print("  " + str(rel_path), style=get_theme().style("key"))
+        console.print()
+        console.print("  docker compose up --build", style=get_theme().style("muted"))
+    except GenerationError as exc:
+        exit_with_error(exc, "generating Docker config", console=console, layout=layout)
 
 
 @cli.command()
-@click.option("--validate", is_flag=True, default=False,
-              help="Validate .env against .env.example")
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
+@click.option("--validate", is_flag=True, default=False, help="Check .env against .env.example.")
+@dir_option
 def env(validate, project_dir):
-    """Generate .env.example or validate your .env file."""
-    from pathlib import Path
+    """Create or check this project's environment variables."""
+    from anyplace.core.build_runner import BuildRunner
+    from anyplace.core.env_manager import EnvManager
+    from anyplace.ui import components as ui
 
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
     manager = EnvManager()
 
     if validate:
-        console.print("[bold cyan]🔍 Validating .env against .env.example...[/bold cyan]")
         try:
             result = manager.validate_env(path)
+        except GenerationError as exc:
+            exit_with_error(exc, "checking your .env", console=console, layout=layout)
+            return
 
-            if result["missing"]:
-                console.print(f"\n[bold red]❌ Missing variables ({len(result['missing'])}):[/bold red]")
-                for var in result["missing"]:
-                    console.print(f"  • {var}")
-            else:
-                console.print("\n[bold green]✅ No missing variables![/bold green]")
+        if result["missing"]:
+            ui.card(console, "\n".join("• " + name for name in result["missing"]), title="Missing", tone="err", layout=layout)
+        else:
+            ui.card(console, "Nothing missing.", title="Looks good", tone="ok", layout=layout)
 
-            if result["ok"]:
-                console.print(f"\n[green]✅ Present ({len(result['ok'])}):[/green]")
-                for var in result["ok"]:
-                    console.print(f"  • {var}")
-
-            if result["extra"]:
-                console.print(f"\n[yellow]⚠️  Extra (not in .env.example) ({len(result['extra'])}):[/yellow]")
-                for var in result["extra"]:
-                    console.print(f"  • {var}")
-
-        except GenerationError as e:
-            exit_with_error(e, "Validating environment")
-    else:
-        runner = BuildRunner(path)
-        project_type = runner._detect_project_type()
-
-        console.print(f"[bold cyan]📋 Generating .env.example...[/bold cyan]")
-        console.print(f"   Detected project type: [bold]{project_type}[/bold]")
-
-        project_name = path.name
-        env_path = manager.write_env_example(path, project_type, project_name)
-
-        console.print(f"\n[bold green]✅ Created: {env_path}[/bold green]")
-        console.print("\n[bold]Next steps:[/bold]")
-        console.print("  1. cp .env.example .env")
-        console.print("  2. Edit .env and fill in your values")
-        console.print("  3. Run [bold]anyplace env --validate[/bold] to check for missing vars")
-
-
-@cli.command()
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
-def guide(project_dir):
-    """Show the learning guide for the project."""
-    from pathlib import Path
-
-    path = Path(project_dir).resolve()
-    runner = BuildRunner(path)
-    project_type = runner._detect_project_type()
-
-    # Try to detect template from project type
-    template_map = {
-        "react-vite": "web-react-vite",
-        "expo-rn": "mobile-expo-rn",
-        "nodejs": "backend-nodejs",
-    }
-    template_name = template_map.get(project_type, "web-react-vite")
-
-    # Check if LEARNING.md exists, show it; otherwise generate on the fly
-    learning_path = path / "LEARNING.md"
-    if learning_path.exists():
-        console.print(learning_path.read_text())
+        if result["extra"]:
+            console.print()
+            ui.card(console, "\n".join("• " + name for name in result["extra"]), title="Extra (not in the example)", tone="warn", layout=layout)
+        if result["missing"]:
+            sys.exit(1)
         return
 
-    generator = GuideGenerator()
-    project_name = path.name
-
-    console.print(f"[bold cyan]📚 Generating learning guide for {project_name}...[/bold cyan]")
-    content = generator.generate_learning_md(template_name, project_name)
-    console.print(content)
-
-    if click.confirm("\nSave LEARNING.md to project?"):
-        learning_path.write_text(content)
-        console.print(f"[bold green]✅ Saved: {learning_path}[/bold green]")
+    project_type = BuildRunner(path)._detect_project_type()
+    env_path = manager.write_env_example(path, project_type, path.name)
+    ui.card(
+        console,
+        "Wrote {0}\n\nNext:\n  cp .env.example .env\n  anywhere env --validate".format(Path(env_path).name),
+        title="Environment",
+        tone="ok",
+        layout=layout,
+    )
 
 
 @cli.command()
-@click.option(
-    "--type", "doc_type",
-    type=click.Choice(["contributing", "changelog", "api", "all"]),
-    default="all",
-    show_default=True,
-    help="Which documentation to generate",
-)
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
-def docs(doc_type, project_dir):
-    """Generate project documentation (CONTRIBUTING.md, CHANGELOG.md, API docs)."""
-    from pathlib import Path
+@dir_option
+def guide(project_dir):
+    """Read (or write) the learning guide for this project."""
+    from anyplace.core.build_runner import BuildRunner
+    from anyplace.core.guide_generator import GuideGenerator
+    from anyplace.ui import components as ui
+    from anyplace.ui.prompts import ask_yes_no
 
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
-    project_name = path.name
 
-    console.print(f"[bold cyan]📝 Generating documentation ({doc_type})...[/bold cyan]")
+    learning_path = path / "LEARNING.md"
+    if learning_path.exists():
+        console.print(learning_path.read_text(errors="ignore"))
+        return
+
+    template_map = {"react-vite": "web-react-vite", "expo-rn": "mobile-expo-rn", "nodejs": "backend-nodejs"}
+    template_name = template_map.get(BuildRunner(path)._detect_project_type(), "web-react-vite")
+
+    content = GuideGenerator().generate_learning_md(template_name, path.name)
+    console.print(content)
+
+    if ask_yes_no(console, "Save this as LEARNING.md?", default=True, layout=layout):
+        learning_path.write_text(content)
+        ui.card(console, "Saved LEARNING.md", title="Done", tone="ok", layout=layout)
+
+
+@cli.command()
+@click.option("--type", "doc_type", type=click.Choice(["contributing", "changelog", "api", "all"]), default="all", show_default=True)
+@dir_option
+def docs(doc_type, project_dir):
+    """Write the project's documentation."""
+    from anyplace.config.api_manager import APIManager
+    from anyplace.core.doc_generator import DocGenerator
+    from anyplace.core.llm_provider import LLMProvider
+    from anyplace.ui import components as ui
+
+    console, layout = _ctx()
+    path = Path(project_dir).resolve()
+
+    llm = None
+    try:
+        api_mgr = APIManager()
+        if api_mgr.list_providers():
+            llm = LLMProvider(api_mgr)
+    except Exception:  # noqa: BLE001 - docs still work without an LLM
+        llm = None
 
     try:
-        # Try to use LLM for API docs if configured
-        llm = None
-        try:
-            api_mgr = APIManager()
-            if api_mgr.list_providers():
-                llm = LLMProvider(api_mgr)
-        except Exception:
-            pass
-
-        generator = DocGenerator(path, llm)
-        written = generator.generate_all(project_name, doc_type)
-
-        console.print(f"\n[bold green]✅ Documentation generated![/bold green]")
-        for name, file_path in written.items():
-            console.print(f"  📄 {file_path.name}")
-
-    except Exception as e:
-        exit_with_error(e, "Generating documentation")
+        written = DocGenerator(path, llm).generate_all(path.name, doc_type)
+        ui.kv(console, [(name, Path(file_path).name) for name, file_path in written.items()], layout=layout, title="Docs written")
+    except Exception as exc:  # noqa: BLE001
+        exit_with_error(exc, "writing documentation", console=console, layout=layout)
 
 
 @cli.command()
 @click.argument("file", required=False)
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
+@dir_option
 def explain(file, project_dir):
-    """Explain what a file does using AI."""
-    from pathlib import Path
+    """Explain what a file does."""
+    from anyplace.cli import flows
+    from anyplace.config.api_manager import APIManager
+    from anyplace.core.llm_provider import LLMProvider
+    from anyplace.ui import components as ui
 
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
 
     if not file:
-        console.print("[yellow]Usage:[/yellow] anyplace explain <filename>")
-        console.print("\nExample: anyplace explain src/App.tsx")
+        ui.card(console, "Tell me which file:\n\n  anywhere explain src/App.tsx", title="Which file?", tone="warn", layout=layout)
         return
 
     file_path = path / file
     if not file_path.exists():
-        file_path = Path(file)  # Try as absolute path
-
+        file_path = Path(file)
     if not file_path.exists():
-        console.print(f"[bold red]File not found:[/bold red] {file}")
-        return
+        ui.card(console, "Can't find {0}".format(file), title="No such file", tone="err", layout=layout)
+        sys.exit(1)
 
     content = file_path.read_text(errors="ignore")
     if len(content) > 4000:
-        content = content[:4000] + "\n... (truncated)"
+        content = content[:4000] + "\n… (truncated)"
 
     try:
-        api_mgr = APIManager()
-        llm = LLMProvider(api_mgr)
-
-        console.print(f"[bold cyan]🔍 Explaining {file}...[/bold cyan]\n")
-
-        system = (
-            "You are a senior developer giving a code review. "
-            "Explain the file clearly: what it does, why it exists, "
-            "key functions/exports, and anything a new developer should know. "
-            "Be concise but thorough. Use plain language."
-        )
-        prompt = f"Explain this file (`{file}`):\n\n```\n{content}\n```"
-
-        explanation = llm.generate_text(
-            prompt=prompt,
-            system=system,
-            temperature=0.3,
-            max_tokens=1024,
-        )
-
-        from rich.panel import Panel
-        console.print(Panel(explanation, title=f"📄 {file}", border_style="cyan"))
-
-    except (ConfigError, APIError) as e:
-        exit_with_error(e, "Explaining file")
+        llm = LLMProvider(APIManager())
+        with flows.thinking(console, "Reading {0}…".format(file_path.name), layout):
+            explanation = llm.generate_text(
+                prompt="Explain this file (`{0}`):\n\n```\n{1}\n```".format(file, content),
+                system=(
+                    "You are a senior developer explaining code to someone reading it on a phone. "
+                    "Short paragraphs, plain language, no preamble. Say what it does, why it exists, "
+                    "and the one thing a newcomer would get wrong."
+                ),
+                temperature=0.3,
+                max_tokens=1024,
+            )
+        ui.card(console, explanation, title=file_path.name, tone="info", layout=layout)
+    except (ConfigError, APIError) as exc:
+        exit_with_error(exc, "explaining that file", console=console, layout=layout)
 
 
 @cli.command()
-@click.option("--dir", "project_dir", type=click.Path(exists=True),
-              default=".", show_default=True, help="Project directory")
-@click.option("--skip-deploy", is_flag=True, default=False,
-              help="Skip deployment config generation")
-@click.option("--auto", "auto_accept", is_flag=True, default=False,
-              help="Auto-accept all steps (no confirmations)")
+@dir_option
+@click.option("--skip-deploy", is_flag=True, default=False, help="Don't generate deployment config.")
+@click.option("--auto", "auto_accept", is_flag=True, default=False, help="Don't ask before each step.")
 def run(project_dir, skip_deploy, auto_accept):
-    """Run the full agentic pipeline on an existing project (install, build, CI, Docker, deploy, serve)."""
-    from pathlib import Path
+    """Set up and run the project in this directory, end to end."""
+    from anyplace.cli import flows
     from anyplace.core.agent_executor import AgentExecutor
+    from anyplace.ui import components as ui
 
+    console, layout = _ctx()
     path = Path(project_dir).resolve()
 
-    console.print(BANNER, style="cyan bold")
-    console.print(f"[bold cyan]⚡ Running agentic pipeline on:[/bold cyan] {path}\n")
+    def on_step(step: str, message: str) -> None:
+        console.print(
+            "  {0} {1} {2}".format(get_theme().icon("spark", emoji=layout.emoji), step, ui.truncate(message, max(10, layout.body_width - 12))),
+            style=get_theme().style("muted"),
+        )
 
-    def agent_progress(step: str, msg: str):
-        console.print(f"  [cyan]⚡ {step}[/cyan] {msg}")
+    executor = AgentExecutor(project_dir=path, progress_callback=on_step, human_accept=not auto_accept)
 
-    executor = AgentExecutor(
-        project_dir=path,
-        progress_callback=agent_progress,
-        human_accept=not auto_accept,
+    ui.kv(
+        console,
+        [("Project", path.name), ("Type", executor.project_type), ("Mode", "auto" if auto_accept else "you approve each step")],
+        layout=layout,
+        title="Setting up",
     )
-
-    console.print(f"[bold]Detected project type:[/bold] {executor.project_type}\n")
+    console.print()
 
     result = executor.run_full_pipeline(skip_deploy=skip_deploy)
-    _show_pipeline_results(result)
-
-    # If dev server is running, wait for Ctrl+C
-    _wait_for_server(result)
+    flows.show_pipeline_results(console, result, layout=layout)
+    flows.wait_for_server(console, result, layout=layout)
 
 
 @cli.command()
 def serve():
-    """Start the AnywhereCode MCP server for Claude integration."""
-    console.print("[bold cyan]🔌 Starting AnywhereCode MCP server...[/bold cyan]")
-    console.print("[dim]Claude can now call: list_templates, generate_plan, generate_project[/dim]")
+    """Run the MCP server so Claude can drive Anywhere Code."""
+    from anyplace.ui import components as ui
 
+    console, layout = _ctx()
     try:
         from anyplace.mcp.server import mcp
-        mcp.run()
     except ImportError:
-        console.print("[bold red]MCP package not installed.[/bold red]")
-        console.print("Run: [bold]pip install 'mcp>=1.0.0'[/bold]")
+        ui.card(
+            console,
+            "The MCP extra isn't installed.\n\nRun: pip install 'anyplace[mcp]'",
+            title="Missing dependency",
+            tone="err",
+            layout=layout,
+        )
+        sys.exit(1)
+
+    console.print("MCP server listening.", style=get_theme().style("accent"))
+    mcp.run()
 
 
-def _wait_for_server(result):
-    """If a dev server process was started, wait for user to Ctrl+C."""
-    if not hasattr(result, 'server_process') or not result.server_process:
-        return
-
-    proc = result.server_process
-    if proc.poll() is not None:
-        return  # Already exited
-
-    console.print(f"\n[bold green]🌐 Dev server is running at {result.server_url}[/bold green]")
-    console.print("[dim]Press Ctrl+C to stop[/dim]\n")
-
-    try:
-        # Stream server output to console
-        for line in proc.stdout:
-            console.print(f"  [dim]{line.rstrip()}[/dim]")
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Stopping dev server...[/yellow]")
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            proc.kill()
-        console.print("[green]Server stopped.[/green]")
+def main() -> None:
+    """Console-script entry point."""
+    cli(prog_name="anywhere", obj={})
 
 
 if __name__ == "__main__":
-    # Just typing 'anyplace' with no args starts the interactive mode
-    import sys
-    if len(sys.argv) == 1:
-        main(standalone_mode=False)
-    else:
-        cli(prog_name="anyplace")
+    main()

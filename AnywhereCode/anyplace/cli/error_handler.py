@@ -1,210 +1,204 @@
 """
-Error handling for AnywhereCode CLI.
+Errors people can act on.
 
-Provides user-friendly error messages and recovery suggestions.
+A stack trace on a phone is four screens of noise you cannot copy out easily.
+Every failure here becomes: what happened, in one line — and the command that
+fixes it.
 """
 
-import sys
-from typing import Optional, Any
-from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
+from __future__ import annotations
 
-console = Console()
+import sys
+from typing import Optional
+
+# Re-exported so callers already importing from here keep working. The facts
+# live in anyplace.config.providers because anyplace.core may not import
+# anyplace.cli, and doctor needs them too.
+from anyplace.config.providers import KEYLESS_PROVIDERS, needs_api_key
+
+# Exception types are imported by the core modules, so they must stay importable
+# without pulling in rich or the UI layer.
 
 
 class AnyplaceError(Exception):
-    """Base exception for AnywhereCode."""
-    pass
+    """Base for everything we raise on purpose."""
 
 
 class APIError(AnyplaceError):
-    """API/LLM provider error."""
-    pass
+    """The LLM provider said no, or never answered."""
 
 
 class ConfigError(AnyplaceError):
-    """Configuration error."""
-    pass
+    """Something about the local setup is wrong."""
 
 
 class FileSystemError(AnyplaceError):
-    """File system operation error."""
-    pass
+    """Reading or writing failed."""
 
 
 class GenerationError(AnyplaceError):
-    """Code generation error."""
-    pass
+    """Planning or code generation failed."""
 
 
-def handle_error(error: Exception, context: Optional[str] = None):
-    """
-    Handle error with user-friendly message.
+_TITLES = {
+    APIError: ("The AI provider had a problem", "err"),
+    ConfigError: ("Setup problem", "warn"),
+    FileSystemError: ("File problem", "err"),
+    GenerationError: ("Couldn't finish generating", "err"),
+}
 
-    Args:
-        error: The exception that occurred
-        context: Additional context about what was happening
-    """
-    error_title = "❌ Error"
-    error_msg = str(error)
 
-    # Categorize and enhance error messages
-    if isinstance(error, APIError):
-        error_title = "🔌 API Error"
-        error_msg = enhance_api_error(error_msg)
-    elif isinstance(error, ConfigError):
-        error_title = "⚙️ Configuration Error"
-        error_msg = enhance_config_error(error_msg)
-    elif isinstance(error, FileSystemError):
-        error_title = "📁 File System Error"
-        error_msg = enhance_fs_error(error_msg)
-    elif isinstance(error, GenerationError):
-        error_title = "🔨 Generation Error"
-        error_msg = enhance_generation_error(error_msg)
-
-    # Build error panel
-    panel_text = Text()
-    if context:
-        panel_text.append(f"While: {context}\n\n")
-    panel_text.append(error_msg)
-
-    console.print(Panel(
-        panel_text,
-        title=error_title,
-        border_style="red",
-    ))
-
-    # Print recovery suggestion if available
-    suggestion = get_recovery_suggestion(error)
-    if suggestion:
-        console.print(Panel(
-            suggestion,
-            title="💡 Try This",
-            border_style="yellow",
-        ))
+def _plain(message: str) -> str:
+    return " ".join(str(message).split()).lower()
 
 
 def enhance_api_error(msg: str) -> str:
-    """Enhance API error messages."""
-    msg_lower = msg.lower()
-
-    if "invalid_api_key" in msg_lower or "unauthorized" in msg_lower:
-        return "API key is invalid or expired.\n\nCheck your credentials in ~/.config/anyplace/config.yaml"
-
-    if "rate_limit" in msg_lower or "quota" in msg_lower:
-        return "API quota exceeded or rate limited.\n\nWait a moment and try again, or switch to a different provider."
-
-    if "connection" in msg_lower or "timeout" in msg_lower:
-        return "Can't connect to API provider.\n\nCheck your internet connection and try again."
-
-    if "model" in msg_lower and "not found" in msg_lower:
-        return "Model ID not found with this provider.\n\nVerify the model ID is correct for your provider."
-
-    return msg
+    low = _plain(msg)
+    if "invalid_api_key" in low or "unauthoris" in low or "unauthoriz" in low or "401" in low:
+        return "Your API key was rejected.\n\nIt may be mistyped, expired, or for a different provider."
+    if "rate limit" in low or "rate_limit" in low or "quota" in low or "429" in low:
+        return "You've hit the provider's rate limit or run out of quota.\n\nWait a minute, or switch provider."
+    if "timed out" in low or "timeout" in low:
+        return "The provider took too long to answer.\n\nOn a weak signal this is common — try again."
+    if "connection" in low:
+        return "Couldn't reach the provider.\n\nCheck you're online."
+    if "model" in low and "not found" in low:
+        return "That model id isn't available on this provider.\n\nPick a different model."
+    return str(msg)
 
 
 def enhance_config_error(msg: str) -> str:
-    """Enhance configuration error messages."""
-    msg_lower = msg.lower()
-
-    if "api_key" in msg_lower:
-        return "API key not configured.\n\nRun: anyplace --configure\nOr edit: ~/.config/anyplace/config.yaml"
-
-    if "provider" in msg_lower:
-        return "LLM provider not configured.\n\nAvailable: claude, gemini, openrouter, custom\nRun: anyplace --configure"
-
-    if "template" in msg_lower:
-        return "Template not found.\n\nRun: anyplace --list-templates\nOr upgrade: anyplace --upgrade"
-
-    return msg
+    low = _plain(msg)
+    if "api key" in low or "api_key" in low or "provider" in low:
+        return "No AI provider is set up yet."
+    if "template" in low:
+        return "That project template is missing or unreadable."
+    return str(msg)
 
 
 def enhance_fs_error(msg: str) -> str:
-    """Enhance file system error messages."""
-    msg_lower = msg.lower()
-
-    if "permission" in msg_lower:
-        return "Permission denied.\n\nCheck that you have write permissions for the target directory."
-
-    if "space" in msg_lower or "disk full" in msg_lower:
-        return "Not enough disk space.\n\nFree up storage and try again."
-
-    if "exists" in msg_lower:
-        return "Project directory already exists.\n\nChoose a different name or delete the existing directory."
-
-    return msg
+    low = _plain(msg)
+    if "permission" in low:
+        return "Permission denied writing there."
+    if "space" in low or "disk full" in low or "no space" in low:
+        return "The device is out of storage."
+    if "exists" in low:
+        return "That folder already exists."
+    return str(msg)
 
 
 def enhance_generation_error(msg: str) -> str:
-    """Enhance generation error messages."""
-    msg_lower = msg.lower()
+    low = _plain(msg)
+    if "timeout" in low or "timed out" in low:
+        return "Generation ran out of time.\n\nA smaller project, or a faster model, will get through."
+    if "dependency" in low or "conflict" in low:
+        return "The plan had files depending on each other in a loop."
+    if "already exists" in low:
+        return str(msg)
+    return str(msg)
 
-    if "timeout" in msg_lower:
-        return "Generation took too long and timed out.\n\nTry with a simpler project or check your internet connection."
 
-    if "dependency" in msg_lower or "conflict" in msg_lower:
-        return "Dependency conflict detected.\n\nConsider removing conflicting packages or updating versions."
-
-    return msg
+_ENHANCERS = {
+    APIError: enhance_api_error,
+    ConfigError: enhance_config_error,
+    FileSystemError: enhance_fs_error,
+    GenerationError: enhance_generation_error,
+}
 
 
 def get_recovery_suggestion(error: Exception) -> Optional[str]:
-    """Get recovery suggestion for error."""
-    msg = str(error).lower()
+    """The literal next command to type."""
+    low = _plain(str(error))
 
-    if "api" in msg and "key" in msg:
-        return "1. Run: anyplace --configure\n2. Enter your API key\n3. Try again"
-
-    if "template" in msg:
-        return "1. Run: anyplace --list-templates\n2. Choose an available template\n3. Try again"
-
-    if "space" in msg or "disk" in msg:
-        return "1. Free up storage space\n2. Run: anyplace again"
-
-    if "permission" in msg:
-        return "1. Check directory permissions\n2. Try a different output location\n3. Run: anyplace --help"
-
+    if isinstance(error, ConfigError) or ("api" in low and "key" in low) or "provider" in low:
+        return "anywhere configure"
+    if "template" in low:
+        return "anywhere templates"
+    if "space" in low or "disk" in low:
+        return "anywhere doctor"
+    if "permission" in low:
+        return "anywhere doctor"
+    if "git" in low and ("not installed" in low or "not found" in low):
+        return "pkg install git      # Termux\napt install git      # Debian/Ubuntu"
+    if "connection" in low or "timed out" in low or "timeout" in low:
+        return "anywhere doctor"
     return None
 
 
-def exit_with_error(error: Exception, context: Optional[str] = None):
-    """Print error and exit."""
-    handle_error(error, context)
+def describe(error: Exception) -> str:
+    """
+    Human-readable body for an exception, without any rendering.
+
+    Never returns an empty string: an error panel with nothing in it tells the
+    user only that something broke, which is the one thing they already know.
+    An enhancer that has nothing to add falls back to the message, and a
+    message that is itself empty falls back to the exception's class name.
+    """
+    for exc_type, enhancer in _ENHANCERS.items():
+        if isinstance(error, exc_type):
+            enhanced = enhancer(str(error))
+            if enhanced and enhanced.strip():
+                return enhanced
+            break
+    return str(error).strip() or error.__class__.__name__
+
+
+def handle_error(error: Exception, context: Optional[str] = None, console=None, layout=None) -> None:
+    """Render an error the way a person can act on."""
+    from anyplace.ui import components as ui
+    from anyplace.ui.layout import Layout
+
+    if console is None:
+        from rich.console import Console
+
+        console = Console()
+    layout = layout or Layout.detect()
+
+    title, tone = "Something went wrong", "err"
+    for exc_type, (exc_title, exc_tone) in _TITLES.items():
+        if isinstance(error, exc_type):
+            title, tone = exc_title, exc_tone
+            break
+
+    body = describe(error)
+    if context:
+        body = "While {0}:\n\n{1}".format(context.lower(), body)
+
+    console.print()
+    ui.card(console, body, title=title, tone=tone, layout=layout)
+
+    suggestion = get_recovery_suggestion(error)
+    if suggestion:
+        ui.card(console, suggestion, title="Try this", tone="warn", layout=layout)
+
+
+def exit_with_error(error: Exception, context: Optional[str] = None, console=None, layout=None):
+    """Report, then stop with a non-zero status so scripts notice."""
+    handle_error(error, context, console=console, layout=layout)
     sys.exit(1)
 
 
 def validate_api_key(api_key: str, provider: str) -> bool:
     """
-    Validate API key format.
+    Cheap shape check, before we waste a network round trip on an obvious typo.
 
-    Args:
-        api_key: The API key to validate
-        provider: The provider name
-
-    Returns:
-        True if valid, False otherwise
+    Deliberately permissive: providers change their prefixes, and refusing a
+    valid key is worse than accepting an invalid one we're about to test anyway.
     """
+    if not needs_api_key(provider):
+        # A key is optional here; anything, including nothing, is acceptable.
+        return True
+
     if not api_key or not api_key.strip():
         return False
 
-    provider = provider.lower()
+    api_key = api_key.strip()
+    provider = (provider or "").lower()
 
     if provider == "claude":
         return api_key.startswith("sk-ant-")
-    elif provider == "gemini":
+    if provider == "gemini":
         return api_key.startswith("AIza")
-    elif provider == "openrouter":
+    if provider == "openrouter":
         return api_key.startswith("sk-or-")
-    elif provider == "custom":
-        return len(api_key) > 10  # Basic check for custom keys
-
     return len(api_key) > 10
-
-
-if __name__ == "__main__":
-    # Test error handling
-    try:
-        raise APIError("Invalid API key: sk-invalid")
-    except AnyplaceError as e:
-        handle_error(e, "Testing API configuration")

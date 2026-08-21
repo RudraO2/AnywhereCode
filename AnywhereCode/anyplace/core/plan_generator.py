@@ -46,6 +46,18 @@ PLAN_RESPONSE_SCHEMA: Dict[str, Any] = {
 }
 
 
+
+def _as_str_list(value: Any) -> List[str]:
+    """Coerce a plan field that should be a list of strings into exactly that."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if item is not None]
+    return [str(value)]
+
+
 @dataclass
 class FileInfo:
     """Information about a file to be generated."""
@@ -226,35 +238,73 @@ Ensure:
         template_name: str,
         project_name: str,
     ) -> ProjectPlan:
-        """Parse and validate plan response from LLM."""
+        """
+        Parse an LLM plan payload into a ProjectPlan.
+
+        Everything here is untrusted: the model may hand back a list where a
+        dict was asked for, a string where a list was asked for, or nulls
+        throughout. Anything malformed becomes a GenerationError the CLI can
+        show and offer to retry — never a bare AttributeError.
+        """
+        if not isinstance(plan_json, dict):
+            raise GenerationError(
+                "Invalid plan response format: expected an object, got {0}.".format(
+                    type(plan_json).__name__
+                )
+            )
+
         try:
-            # Parse files
+            raw_files = plan_json.get("files")
+            if raw_files is None:
+                # A plan with no file list is not a plan. Say so here rather
+                # than letting validate_plan report a vague "invalid plan".
+                raise GenerationError("Invalid plan response format: the plan lists no 'files'.")
+            if not isinstance(raw_files, list):
+                raise GenerationError(
+                    "Invalid plan response format: 'files' should be a list, got {0}.".format(
+                        type(raw_files).__name__
+                    )
+                )
+
             files = []
-            for file_dict in plan_json.get("files", []):
+            for index, file_dict in enumerate(raw_files):
+                if not isinstance(file_dict, dict):
+                    raise GenerationError(
+                        "Invalid plan response format: files[{0}] should be an object, got {1}.".format(
+                            index, type(file_dict).__name__
+                        )
+                    )
+
+                dependencies = file_dict.get("dependencies") or []
+                if not isinstance(dependencies, list):
+                    dependencies = [dependencies]
+
                 files.append(
                     FileInfo(
-                        path=file_dict.get("path", ""),
-                        description=file_dict.get("description", ""),
-                        file_type=file_dict.get("file_type", "other"),
-                        dependencies=file_dict.get("dependencies", []),
+                        path=str(file_dict.get("path") or ""),
+                        description=str(file_dict.get("description") or ""),
+                        file_type=str(file_dict.get("file_type") or "other"),
+                        dependencies=[str(dep) for dep in dependencies],
                     )
                 )
 
             plan = ProjectPlan(
-                project_name=plan_json.get("project_name", project_name),
+                project_name=str(plan_json.get("project_name") or project_name),
                 template=template_name,
-                description=plan_json.get("description", ""),
-                tech_stack=plan_json.get("tech_stack", []),
+                description=str(plan_json.get("description") or ""),
+                tech_stack=_as_str_list(plan_json.get("tech_stack")),
                 files=files,
-                key_features=plan_json.get("key_features", []),
-                estimated_time=plan_json.get("estimated_time", "Unknown"),
-                architecture_notes=plan_json.get("architecture_notes", ""),
-                next_steps=plan_json.get("next_steps", []),
+                key_features=_as_str_list(plan_json.get("key_features")),
+                estimated_time=str(plan_json.get("estimated_time") or "Unknown"),
+                architecture_notes=str(plan_json.get("architecture_notes") or ""),
+                next_steps=_as_str_list(plan_json.get("next_steps")),
             )
 
             return plan
 
-        except (KeyError, TypeError) as e:
+        except GenerationError:
+            raise
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
             raise GenerationError(f"Invalid plan response format: {e}")
 
     def validate_plan(self, plan: ProjectPlan) -> bool:
